@@ -10,7 +10,7 @@ const falcon: Rocket = {
   id: 1,
   name: 'Falcon 9',
   capacity: 9,
-  rangeKm: 200_000,
+  range: 'EARTH',
   status: 'ACTIVE',
   lastMaintenanceDate: '2026-01-15',
   nextMaintenanceDate: '2026-07-15',

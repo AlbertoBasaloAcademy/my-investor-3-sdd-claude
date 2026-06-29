@@ -5,7 +5,7 @@ import java.time.LocalDate;
 public record RocketRequest(
     String name,
     int capacity,
-    int rangeKm,
+    RocketRange range,
     RocketStatus status,
     LocalDate lastMaintenanceDate,
     LocalDate nextMaintenanceDate) {}

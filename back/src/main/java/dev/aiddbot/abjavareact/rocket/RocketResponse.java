@@ -6,7 +6,7 @@ public record RocketResponse(
     Long id,
     String name,
     int capacity,
-    int rangeKm,
+    String range,
     String status,
     LocalDate lastMaintenanceDate,
     LocalDate nextMaintenanceDate) {}

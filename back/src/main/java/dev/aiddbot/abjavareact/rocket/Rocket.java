@@ -24,8 +24,9 @@ public class Rocket {
   @Column(nullable = false)
   private int capacity;
 
-  @Column(name = "range_km", nullable = false)
-  private int rangeKm;
+  @Enumerated(EnumType.STRING)
+  @Column(name = "range", nullable = false)
+  private RocketRange range;
 
   @Enumerated(EnumType.STRING)
   @Column(nullable = false)
@@ -42,13 +43,13 @@ public class Rocket {
   public Rocket(
       String name,
       int capacity,
-      int rangeKm,
+      RocketRange range,
       RocketStatus status,
       LocalDate lastMaintenanceDate,
       LocalDate nextMaintenanceDate) {
     this.name = name;
     this.capacity = capacity;
-    this.rangeKm = rangeKm;
+    this.range = range;
     this.status = status;
     this.lastMaintenanceDate = lastMaintenanceDate;
     this.nextMaintenanceDate = nextMaintenanceDate;
@@ -57,14 +58,14 @@ public class Rocket {
   public Long getId() { return id; }
   public String getName() { return name; }
   public int getCapacity() { return capacity; }
-  public int getRangeKm() { return rangeKm; }
+  public RocketRange getRange() { return range; }
   public RocketStatus getStatus() { return status; }
   public LocalDate getLastMaintenanceDate() { return lastMaintenanceDate; }
   public LocalDate getNextMaintenanceDate() { return nextMaintenanceDate; }
 
   public void setName(String name) { this.name = name; }
   public void setCapacity(int capacity) { this.capacity = capacity; }
-  public void setRangeKm(int rangeKm) { this.rangeKm = rangeKm; }
+  public void setRange(RocketRange range) { this.range = range; }
   public void setStatus(RocketStatus status) { this.status = status; }
   public void setLastMaintenanceDate(LocalDate lastMaintenanceDate) { this.lastMaintenanceDate = lastMaintenanceDate; }
   public void setNextMaintenanceDate(LocalDate nextMaintenanceDate) { this.nextMaintenanceDate = nextMaintenanceDate; }

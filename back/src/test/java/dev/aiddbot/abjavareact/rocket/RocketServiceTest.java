@@ -27,13 +27,12 @@ class RocketServiceTest {
   private static final LocalDate NEXT = LocalDate.of(2026, 7, 15);
 
   private Rocket savedRocket(Long id) {
-    Rocket r = new Rocket("Falcon 9", 9, 200_000, RocketStatus.ACTIVE, LAST, NEXT);
-    return r;
+    return new Rocket("Falcon 9", 9, RocketRange.EARTH, RocketStatus.ACTIVE, LAST, NEXT);
   }
 
   @Test
   void findAllReturnsMappedResponses() {
-    Rocket rocket = new Rocket("Falcon 9", 9, 200_000, RocketStatus.ACTIVE, LAST, NEXT);
+    Rocket rocket = new Rocket("Falcon 9", 9, RocketRange.EARTH, RocketStatus.ACTIVE, LAST, NEXT);
     given(repository.findAll()).willReturn(List.of(rocket));
 
     List<RocketResponse> result = service.findAll();
@@ -45,14 +44,14 @@ class RocketServiceTest {
 
   @Test
   void findByIdReturnsResponseWhenFound() {
-    Rocket rocket = new Rocket("Falcon 9", 9, 200_000, RocketStatus.ACTIVE, LAST, NEXT);
+    Rocket rocket = new Rocket("Falcon 9", 9, RocketRange.EARTH, RocketStatus.ACTIVE, LAST, NEXT);
     given(repository.findById(1L)).willReturn(Optional.of(rocket));
 
     RocketResponse result = service.findById(1L);
 
     assertThat(result.name()).isEqualTo("Falcon 9");
     assertThat(result.capacity()).isEqualTo(9);
-    assertThat(result.rangeKm()).isEqualTo(200_000);
+    assertThat(result.range()).isEqualTo("EARTH");
   }
 
   @Test
@@ -66,8 +65,8 @@ class RocketServiceTest {
 
   @Test
   void createPersistsAndReturnsMappedResponse() {
-    RocketRequest request = new RocketRequest("Falcon 9", 9, 200_000, RocketStatus.ACTIVE, LAST, NEXT);
-    Rocket saved = new Rocket("Falcon 9", 9, 200_000, RocketStatus.ACTIVE, LAST, NEXT);
+    RocketRequest request = new RocketRequest("Falcon 9", 9, RocketRange.EARTH, RocketStatus.ACTIVE, LAST, NEXT);
+    Rocket saved = new Rocket("Falcon 9", 9, RocketRange.EARTH, RocketStatus.ACTIVE, LAST, NEXT);
     given(repository.save(any(Rocket.class))).willReturn(saved);
 
     RocketResponse result = service.create(request);
@@ -81,7 +80,7 @@ class RocketServiceTest {
 
   @Test
   void createThrows400WhenNameIsBlank() {
-    RocketRequest request = new RocketRequest("", 9, 200_000, RocketStatus.ACTIVE, null, null);
+    RocketRequest request = new RocketRequest("", 9, RocketRange.EARTH, RocketStatus.ACTIVE, null, null);
 
     assertThatThrownBy(() -> service.create(request))
         .isInstanceOf(ResponseStatusException.class)
@@ -90,7 +89,7 @@ class RocketServiceTest {
 
   @Test
   void createThrows400WhenCapacityIsZero() {
-    RocketRequest request = new RocketRequest("Falcon 9", 0, 200_000, RocketStatus.ACTIVE, null, null);
+    RocketRequest request = new RocketRequest("Falcon 9", 0, RocketRange.EARTH, RocketStatus.ACTIVE, null, null);
 
     assertThatThrownBy(() -> service.create(request))
         .isInstanceOf(ResponseStatusException.class)
@@ -98,8 +97,8 @@ class RocketServiceTest {
   }
 
   @Test
-  void createThrows400WhenRangeIsZero() {
-    RocketRequest request = new RocketRequest("Falcon 9", 9, 0, RocketStatus.ACTIVE, null, null);
+  void createThrows400WhenRangeIsNull() {
+    RocketRequest request = new RocketRequest("Falcon 9", 9, null, RocketStatus.ACTIVE, null, null);
 
     assertThatThrownBy(() -> service.create(request))
         .isInstanceOf(ResponseStatusException.class)
@@ -108,15 +107,16 @@ class RocketServiceTest {
 
   @Test
   void updateAppliesAllFieldsAndPersists() {
-    Rocket existing = new Rocket("Old Name", 5, 100_000, RocketStatus.ACTIVE, null, null);
+    Rocket existing = new Rocket("Old Name", 5, RocketRange.EARTH, RocketStatus.ACTIVE, null, null);
     given(repository.findById(1L)).willReturn(Optional.of(existing));
     given(repository.save(any(Rocket.class))).willReturn(existing);
 
-    RocketRequest request = new RocketRequest("Falcon 9", 9, 200_000, RocketStatus.MAINTENANCE, LAST, NEXT);
+    RocketRequest request = new RocketRequest("Falcon 9", 9, RocketRange.MARS, RocketStatus.MAINTENANCE, LAST, NEXT);
     service.update(1L, request);
 
     assertThat(existing.getName()).isEqualTo("Falcon 9");
     assertThat(existing.getCapacity()).isEqualTo(9);
+    assertThat(existing.getRange()).isEqualTo(RocketRange.MARS);
     assertThat(existing.getStatus()).isEqualTo(RocketStatus.MAINTENANCE);
     assertThat(existing.getLastMaintenanceDate()).isEqualTo(LAST);
   }
@@ -124,7 +124,7 @@ class RocketServiceTest {
   @Test
   void updateThrows404WhenNotFound() {
     given(repository.findById(99L)).willReturn(Optional.empty());
-    RocketRequest request = new RocketRequest("Falcon 9", 9, 200_000, RocketStatus.ACTIVE, null, null);
+    RocketRequest request = new RocketRequest("Falcon 9", 9, RocketRange.EARTH, RocketStatus.ACTIVE, null, null);
 
     assertThatThrownBy(() -> service.update(99L, request))
         .isInstanceOf(ResponseStatusException.class)

@@ -32,7 +32,7 @@ public class RocketService {
         new Rocket(
             request.name(),
             request.capacity(),
-            request.rangeKm(),
+            request.range(),
             request.status(),
             request.lastMaintenanceDate(),
             request.nextMaintenanceDate());
@@ -49,7 +49,7 @@ public class RocketService {
                     new ResponseStatusException(HttpStatus.NOT_FOUND, "Rocket not found: " + id));
     rocket.setName(request.name());
     rocket.setCapacity(request.capacity());
-    rocket.setRangeKm(request.rangeKm());
+    rocket.setRange(request.range());
     rocket.setStatus(request.status());
     rocket.setLastMaintenanceDate(request.lastMaintenanceDate());
     rocket.setNextMaintenanceDate(request.nextMaintenanceDate());
@@ -70,8 +70,8 @@ public class RocketService {
     if (request.capacity() <= 0) {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Capacity must be positive");
     }
-    if (request.rangeKm() <= 0) {
-      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Range must be positive");
+    if (request.range() == null) {
+      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Range is required");
     }
     if (request.status() == null) {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Status is required");
@@ -83,7 +83,7 @@ public class RocketService {
         rocket.getId(),
         rocket.getName(),
         rocket.getCapacity(),
-        rocket.getRangeKm(),
+        rocket.getRange().name(),
         rocket.getStatus().name(),
         rocket.getLastMaintenanceDate(),
         rocket.getNextMaintenanceDate());

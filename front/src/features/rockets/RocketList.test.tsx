@@ -15,7 +15,7 @@ const falcon: Rocket = {
   id: 1,
   name: 'Falcon 9',
   capacity: 9,
-  rangeKm: 200_000,
+  range: 'EARTH',
   status: 'ACTIVE',
   lastMaintenanceDate: '2026-01-15',
   nextMaintenanceDate: '2026-07-15',
@@ -45,6 +45,7 @@ test('renders the fleet table when data loads', async () => {
   expect(screen.getByTestId('rocket-row-1')).toBeInTheDocument();
   expect(screen.getByText('Falcon 9')).toBeInTheDocument();
   expect(screen.getByText('ACTIVE')).toBeInTheDocument();
+  expect(screen.getByText('EARTH')).toBeInTheDocument();
 });
 
 test('shows empty state when fleet has no rockets', async () => {
@@ -76,6 +77,7 @@ test('opens the form when add button is clicked', async () => {
 
   expect(screen.getByTestId('rocket-form')).toBeInTheDocument();
   expect(screen.getByTestId('field-name')).toBeInTheDocument();
+  expect(screen.getByTestId('field-range')).toBeInTheDocument();
 });
 
 test('creates a rocket when form is submitted', async () => {
@@ -91,13 +93,12 @@ test('creates a rocket when form is submitted', async () => {
   await user.type(screen.getByTestId('field-name'), 'Falcon 9');
   await user.clear(screen.getByTestId('field-capacity'));
   await user.type(screen.getByTestId('field-capacity'), '9');
-  await user.clear(screen.getByTestId('field-range'));
-  await user.type(screen.getByTestId('field-range'), '200000');
+  await user.selectOptions(screen.getByTestId('field-range'), 'EARTH');
   await user.click(screen.getByTestId('submit-btn'));
 
   await waitFor(() => expect(createRocket).toHaveBeenCalled());
   expect(createRocket).toHaveBeenCalledWith(
-    expect.objectContaining({ name: 'Falcon 9', capacity: 9, rangeKm: 200_000 }),
+    expect.objectContaining({ name: 'Falcon 9', capacity: 9, range: 'EARTH' }),
   );
 });
 
@@ -113,6 +114,7 @@ test('opens edit form pre-filled with rocket data', async () => {
   expect(screen.getByTestId('rocket-form')).toBeInTheDocument();
   expect(screen.getByTestId('field-name')).toHaveValue('Falcon 9');
   expect(screen.getByTestId('field-status')).toHaveValue('ACTIVE');
+  expect(screen.getByTestId('field-range')).toHaveValue('EARTH');
 });
 
 test('shows confirmation before deleting a rocket', async () => {

@@ -35,12 +35,12 @@ class RocketControllerTest {
 
   private static final RocketResponse FALCON =
       new RocketResponse(
-          1L, "Falcon 9", 9, 200_000, "ACTIVE",
+          1L, "Falcon 9", 9, "EARTH", "ACTIVE",
           LocalDate.of(2026, 1, 15), LocalDate.of(2026, 7, 15));
 
   private static final RocketRequest FALCON_REQUEST =
       new RocketRequest(
-          "Falcon 9", 9, 200_000, RocketStatus.ACTIVE,
+          "Falcon 9", 9, RocketRange.EARTH, RocketStatus.ACTIVE,
           LocalDate.of(2026, 1, 15), LocalDate.of(2026, 7, 15));
 
   @Test
@@ -52,7 +52,7 @@ class RocketControllerTest {
         .andExpect(jsonPath("$[0].id").value(1))
         .andExpect(jsonPath("$[0].name").value("Falcon 9"))
         .andExpect(jsonPath("$[0].capacity").value(9))
-        .andExpect(jsonPath("$[0].rangeKm").value(200_000))
+        .andExpect(jsonPath("$[0].range").value("EARTH"))
         .andExpect(jsonPath("$[0].status").value("ACTIVE"));
   }
 
@@ -93,7 +93,7 @@ class RocketControllerTest {
   void updateReturnsUpdatedRocket() throws Exception {
     RocketResponse updated =
         new RocketResponse(
-            1L, "Falcon 9", 9, 200_000, "MAINTENANCE",
+            1L, "Falcon 9", 9, "MOON", "MAINTENANCE",
             LocalDate.of(2026, 6, 1), LocalDate.of(2026, 12, 1));
     given(service.update(eq(1L), any(RocketRequest.class))).willReturn(updated);
 

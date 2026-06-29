@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import { useRockets } from './useRockets';
 import { createRocket, updateRocket, deleteRocket } from './rocketsApi';
-import type { Rocket, RocketRequest, RocketStatus } from '../../shared/types/rocket';
+import type { Rocket, RocketRequest, RocketStatus, RocketRange } from '../../shared/types/rocket';
 import './RocketList.css';
 
 type FormState = {
   name: string;
   capacity: string;
-  rangeKm: string;
+  range: RocketRange;
   status: RocketStatus;
   lastMaintenanceDate: string;
   nextMaintenanceDate: string;
@@ -16,7 +16,7 @@ type FormState = {
 const EMPTY_FORM: FormState = {
   name: '',
   capacity: '',
-  rangeKm: '',
+  range: 'EARTH',
   status: 'ACTIVE',
   lastMaintenanceDate: '',
   nextMaintenanceDate: '',
@@ -26,7 +26,7 @@ function rocketToForm(rocket: Rocket): FormState {
   return {
     name: rocket.name,
     capacity: String(rocket.capacity),
-    rangeKm: String(rocket.rangeKm),
+    range: rocket.range,
     status: rocket.status,
     lastMaintenanceDate: rocket.lastMaintenanceDate ?? '',
     nextMaintenanceDate: rocket.nextMaintenanceDate ?? '',
@@ -37,7 +37,7 @@ function formToRequest(form: FormState): RocketRequest {
   return {
     name: form.name,
     capacity: Number(form.capacity),
-    rangeKm: Number(form.rangeKm),
+    range: form.range,
     status: form.status,
     lastMaintenanceDate: form.lastMaintenanceDate || null,
     nextMaintenanceDate: form.nextMaintenanceDate || null,
@@ -167,15 +167,16 @@ export function RocketList() {
             </label>
 
             <label className="rocket-form-field">
-              <span>Range (km)</span>
-              <input
-                type="number"
-                min="1"
-                value={form.rangeKm}
-                onChange={(e) => handleFieldChange('rangeKm', e.target.value)}
-                required
+              <span>Range</span>
+              <select
+                value={form.range}
+                onChange={(e) => handleFieldChange('range', e.target.value as RocketRange)}
                 data-testid="field-range"
-              />
+              >
+                <option value="EARTH">Earth</option>
+                <option value="MOON">Moon</option>
+                <option value="MARS">Mars</option>
+              </select>
             </label>
 
             <label className="rocket-form-field">
@@ -240,7 +241,7 @@ export function RocketList() {
               <tr>
                 <th>Name</th>
                 <th>Capacity</th>
-                <th>Range (km)</th>
+                <th>Range</th>
                 <th>Status</th>
                 <th>Last Maintenance</th>
                 <th>Next Maintenance</th>
@@ -252,7 +253,7 @@ export function RocketList() {
                 <tr key={rocket.id} data-testid={`rocket-row-${rocket.id}`}>
                   <td className="rocket-name">{rocket.name}</td>
                   <td>{rocket.capacity}</td>
-                  <td>{rocket.rangeKm.toLocaleString()}</td>
+                  <td>{rocket.range}</td>
                   <td>
                     <span className={`rocket-status rocket-status--${rocket.status.toLowerCase()}`}>
                       {rocket.status}

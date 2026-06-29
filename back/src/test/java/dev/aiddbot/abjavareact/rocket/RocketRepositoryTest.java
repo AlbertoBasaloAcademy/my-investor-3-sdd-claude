@@ -21,7 +21,7 @@ class RocketRepositoryTest {
         new Rocket(
             "Falcon 9",
             9,
-            200_000,
+            RocketRange.EARTH,
             RocketStatus.ACTIVE,
             LocalDate.of(2026, 1, 15),
             LocalDate.of(2026, 7, 15));
@@ -36,7 +36,7 @@ class RocketRepositoryTest {
             found -> {
               assertThat(found.getName()).isEqualTo("Falcon 9");
               assertThat(found.getCapacity()).isEqualTo(9);
-              assertThat(found.getRangeKm()).isEqualTo(200_000);
+              assertThat(found.getRange()).isEqualTo(RocketRange.EARTH);
               assertThat(found.getStatus()).isEqualTo(RocketStatus.ACTIVE);
               assertThat(found.getLastMaintenanceDate()).isEqualTo(LocalDate.of(2026, 1, 15));
               assertThat(found.getNextMaintenanceDate()).isEqualTo(LocalDate.of(2026, 7, 15));
@@ -45,8 +45,8 @@ class RocketRepositoryTest {
 
   @Test
   void findsAllRockets() {
-    repository.save(new Rocket("Falcon 9", 9, 200_000, RocketStatus.ACTIVE, null, null));
-    repository.save(new Rocket("Starship", 100, 1_000_000, RocketStatus.MAINTENANCE, null, null));
+    repository.save(new Rocket("Falcon 9", 9, RocketRange.EARTH, RocketStatus.ACTIVE, null, null));
+    repository.save(new Rocket("Starship", 100, RocketRange.MARS, RocketStatus.MAINTENANCE, null, null));
 
     assertThat(repository.findAll()).hasSize(2);
   }
@@ -54,7 +54,7 @@ class RocketRepositoryTest {
   @Test
   void deletesRocket() {
     Rocket saved =
-        repository.save(new Rocket("Falcon 9", 9, 200_000, RocketStatus.ACTIVE, null, null));
+        repository.save(new Rocket("Falcon 9", 9, RocketRange.EARTH, RocketStatus.ACTIVE, null, null));
 
     repository.deleteById(saved.getId());
 
