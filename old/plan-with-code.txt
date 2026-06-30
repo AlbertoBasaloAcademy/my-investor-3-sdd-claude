@@ -1,0 +1,947 @@
+# Booking Feature Redesign — Implementation Plan
+
+Spec: `.product/specs/booking.spec.md`
+Scope: backend + frontend code changes only. No Playwright/e2e work (out of scope for this pass).
+
+---
+
+## 1. Data model changes (backend)
+
+### 1.1 `back/src/main/java/dev/aiddbot/abjavareact/booking/BookingStatus.java`
+Replace enum values:
+```java
+public enum BookingStatus {
+  CREATED, CANCELLED
+}
+```
+(Remove `CONFIRMED`, `PAYED`.)
+
+### 1.2 `back/src/main/java/dev/aiddbot/abjavareact/booking/Booking.java`
+- Add new field `passengerPhone`:
+  ```java
+  @Column(name = "passenger_phone", nullable = false)
+  private String passengerPhone;
+  ```
+- Update constructor signature to take phone and drop client-settable status (status is always set internally to `CREATED` by the entity itself, not passed in):
+  ```java
+  public Booking(Launch launch, String passengerName, String passengerEmail, String passengerPhone) {
+    this.launch = launch;
+    this.passengerName = passengerName;
+    this.passengerEmail = passengerEmail;
+    this.passengerPhone = passengerPhone;
+    this.status = BookingStatus.CREATED;
+  }
+  ```
+  Rationale: matches the spec rule "a new booking always starts CREATED" at the entity level, not just in the service — this is the strongest place to guarantee the invariant. JPA's no-arg `protected Booking()` constructor remains for Hibernate.
+- Add `getPassengerPhone()` getter.
+- Remove the public `setStatus(BookingStatus)` setter — status now only changes via a dedicated `cancel()` behavior on the entity, never via arbitrary `setStatus`. Add a method that encodes the transition rule directly on the entity:
+  ```java
+  public void cancel() {
+    this.status = BookingStatus.CANCELLED;
+  }
+  ```
+  This keeps the "CREATED→CANCELLED only, never back" rule colocated with the entity rather than re-implemented ad hoc in the service, and removes the only call site that could otherwise set status to an arbitrary value.
+
+  Since `update()` is being removed entirely (per the already-decided design), `setLaunch`, `setPassengerName`, `setPassengerEmail` become dead code with no caller. **Recommendation: delete the unused setters** (`setLaunch`, `setPassengerName`, `setPassengerEmail`) to keep the entity surface minimal and matching the spec's lifecycle (only `cancel()` mutates state post-creation). Do not add a `setPassengerPhone` setter either — nothing will call it. Final entity should expose only getters + `cancel()` plus the constructor.
+
+### 1.3 `back/src/main/java/dev/aiddbot/abjavareact/booking/BookingRequest.java`
+Per spec, the client never sets status (server always starts `CREATED`). Drop `status` from the request entirely and add `passengerPhone`:
+```java
+public record BookingRequest(
+    Long launchId, String passengerName, String passengerEmail, String passengerPhone) {}
+```
+
+### 1.4 `back/src/main/java/dev/aiddbot/abjavareact/booking/BookingResponse.java`
+Add `passengerPhone` right after `passengerEmail`:
+```java
+public record BookingResponse(
+    Long id,
+    Long launchId,
+    String launchRocketName,
+    LocalDate launchDate,
+    String passengerName,
+    String passengerEmail,
+    String passengerPhone,
+    String status) {}
+```
+
+### 1.5 `back/src/main/java/dev/aiddbot/abjavareact/booking/BookingRepository.java`
+No change needed — stays `JpaRepository<Booking, Long>`.
+
+---
+
+## 2. Backend API changes
+
+### 2.1 Final endpoint list after change
+- `GET /api/bookings` — list all (unchanged shape, new fields)
+- `GET /api/bookings/{id}` — get one (keep; nothing in the spec or design decisions calls for removing it, and other entities keep their single-resource GET — removing it would be an unrelated/speculative deletion)
+- `POST /api/bookings` — create, always starts `CREATED`, 400 on missing name/email/phone/launchId
+- `PATCH /api/bookings/{id}/cancel` — NEW. Transitions CREATED→CANCELLED, 404 if booking doesn't exist
+- ~~`PUT /api/bookings/{id}`~~ — REMOVED
+- ~~`DELETE /api/bookings/{id}`~~ — REMOVED
+
+### 2.2 `back/src/main/java/dev/aiddbot/abjavareact/booking/BookingService.java`
+New method signatures:
+```java
+public List<BookingResponse> findAll()                // unchanged behavior, new mapping
+public BookingResponse findById(Long id)               // unchanged
+public BookingResponse create(BookingRequest request)  // new validation + always CREATED
+public BookingResponse cancel(Long id)                 // NEW
+```
+Remove: `update(Long id, BookingRequest request)`, `delete(Long id)`.
+
+`create()`:
+```java
+public BookingResponse create(BookingRequest request) {
+  validate(request);
+  Launch launch = findLaunch(request.launchId());
+  Booking booking = new Booking(launch, request.passengerName(), request.passengerEmail(), request.passengerPhone());
+  return toResponse(repository.save(booking));
+}
+```
+(Status is no longer taken from the request — the `Booking` constructor itself forces `CREATED`, see 1.2.)
+
+`validate()` — update to check phone instead of status, and drop the status-null check:
+```java
+private void validate(BookingRequest request) {
+  if (request.launchId() == null) {
+    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Launch is required");
+  }
+  if (request.passengerName() == null || request.passengerName().isBlank()) {
+    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Passenger name is required");
+  }
+  if (request.passengerEmail() == null || request.passengerEmail().isBlank()) {
+    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Passenger email is required");
+  }
+  if (request.passengerPhone() == null || request.passengerPhone().isBlank()) {
+    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Passenger phone is required");
+  }
+}
+```
+
+`cancel()` — new method, loads the entity (it needs to mutate and save, not just check existence like `delete()` did):
+```java
+public BookingResponse cancel(Long id) {
+  Booking booking =
+      repository
+          .findById(id)
+          .orElseThrow(
+              () -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Booking not found: " + id));
+  booking.cancel();
+  return toResponse(repository.save(booking));
+}
+```
+Note: spec doesn't require rejecting a *second* cancel of an already-CANCELLED booking (no acceptance criterion demands a 409/400 for double-cancel). `cancel()` on the entity is idempotent (sets status to CANCELLED regardless of current value) — this doesn't violate "never transition back" since CANCELLED→CANCELLED isn't a backward transition. The frontend gates the Cancel button on `status === 'CREATED'`, so this path is normally unreachable via the UI anyway. **Decision: do not add extra guard logic for double-cancel** — keep it minimal per "no speculative abstractions." If stricter behavior is wanted later, that needs an explicit new acceptance criterion.
+
+Remove `delete()` and `update()` entirely. `findLaunch()` private helper stays unchanged. `toResponse()` updated to include `passengerPhone`:
+```java
+private BookingResponse toResponse(Booking booking) {
+  return new BookingResponse(
+      booking.getId(),
+      booking.getLaunch().getId(),
+      booking.getLaunch().getRocket().getName(),
+      booking.getLaunch().getDate(),
+      booking.getPassengerName(),
+      booking.getPassengerEmail(),
+      booking.getPassengerPhone(),
+      booking.getStatus().name());
+}
+```
+
+### 2.3 `back/src/main/java/dev/aiddbot/abjavareact/booking/BookingController.java`
+- Remove `@PutMapping("/{id}") update(...)` and `@DeleteMapping("/{id}") delete(...)`.
+- Add:
+  ```java
+  @PatchMapping("/{id}/cancel")
+  public BookingResponse cancel(@PathVariable Long id) {
+    return service.cancel(id);
+  }
+  ```
+  New import: `org.springframework.web.bind.annotation.PatchMapping`.
+- Keep `findAll()`, `findById()`, `create()` (with Location header) unchanged in structure.
+- Final controller imports needed: `GetMapping`, `PostMapping`, `PatchMapping`, `PathVariable`, `RequestBody`, `RequestMapping`, `RestController`, `ResponseEntity`, `ServletUriComponentsBuilder`, `URI`, `List`. Drop `DeleteMapping`, `PutMapping`.
+
+---
+
+## 3. Backend tests
+
+### 3.1 `back/src/test/java/dev/aiddbot/abjavareact/booking/BookingServiceTest.java`
+
+Update shared fixtures:
+```java
+private static final BookingRequest REQUEST =
+    new BookingRequest(1L, "Ada Lovelace", "ada@example.com", "+1-555-0100");
+
+private Booking newBooking() {
+  return new Booking(LAUNCH, "Ada Lovelace", "ada@example.com", "+1-555-0100");
+}
+```
+
+**Remove these test methods** (update/delete no longer exist; status no longer in request):
+- `updateAppliesAllFieldsAndPersists`
+- `updateThrows404WhenNotFound`
+- `deleteRemovesExistingBooking`
+- `deleteThrows404WhenNotFound`
+- `createThrows400WhenStatusIsNull`
+
+**Modify existing test methods**:
+- `findAllReturnsMappedResponses` — assert `result.get(0).status()).isEqualTo("CREATED")` instead of `"CONFIRMED"`.
+- `findByIdReturnsResponseWhenFound` — assert status `"CREATED"`.
+- `findByIdThrows404WhenNotFound` — unchanged.
+- `createPersistsAndReturnsMappedResponse` — assert `result.status()).isEqualTo("CREATED")`; add assertion `result.passengerPhone()).isEqualTo("+1-555-0100")`.
+- `createThrows400WhenLaunchIdIsNull` — update `BookingRequest` literal to the new 4-arg form with phone.
+- `createThrows400WhenPassengerNameIsBlank` — update literal, keep blank name.
+- `createThrows400WhenPassengerEmailIsBlank` — update literal, keep blank email.
+- `createThrows400WhenLaunchNotFound` — uses `REQUEST`, no change needed beyond the fixture update above.
+
+**Add new test methods**:
+```java
+@Test
+void createThrows400WhenPassengerPhoneIsBlank() {
+  BookingRequest bad = new BookingRequest(1L, "Ada Lovelace", "ada@example.com", "  ");
+
+  assertThatThrownBy(() -> service.create(bad))
+      .isInstanceOf(ResponseStatusException.class)
+      .hasMessageContaining("400");
+}
+
+@Test
+void cancelTransitionsCreatedBookingToCancelledAndPersists() {
+  given(repository.findById(1L)).willReturn(Optional.of(newBooking()));
+  given(repository.save(any())).willAnswer(inv -> inv.getArgument(0));
+
+  BookingResponse result = service.cancel(1L);
+
+  assertThat(result.status()).isEqualTo("CANCELLED");
+}
+
+@Test
+void cancelThrows404WhenNotFound() {
+  given(repository.findById(99L)).willReturn(Optional.empty());
+
+  assertThatThrownBy(() -> service.cancel(99L))
+      .isInstanceOf(ResponseStatusException.class)
+      .hasMessageContaining("404");
+}
+```
+(Skip adding a separate "always starts CREATED" test if `createPersistsAndReturnsMappedResponse` already asserts the status — avoid duplicate coverage.)
+
+Remove now-unused static import `org.mockito.BDDMockito.then` (only used by the two removed delete tests). Keep `org.mockito.ArgumentMatchers.any` (still used by create/cancel tests via `repository.save(any())`).
+
+### 3.2 `back/src/test/java/dev/aiddbot/abjavareact/booking/BookingControllerTest.java`
+
+Update fixtures:
+```java
+private static final BookingResponse APOLLO =
+    new BookingResponse(1L, 2L, "Falcon 9", DATE, "Ada Lovelace", "ada@example.com", "+1-555-0100", "CREATED");
+
+private static final BookingRequest APOLLO_REQUEST =
+    new BookingRequest(2L, "Ada Lovelace", "ada@example.com", "+1-555-0100");
+```
+
+**Remove**: `updateReturnsUpdatedBooking`, `updateReturns404WhenNotFound`, `deleteReturns204`, `deleteReturns404WhenNotFound`.
+
+Remove now-unused imports: static `MockMvcRequestBuilders.delete`, `.put`, and static `BDDMockito.willDoNothing`, `willThrow` (the static `willThrow`/`willDoNothing` imports were only used by the delete tests being removed; `findByIdReturns404WhenNotFound` and similar use the instance-chained `given(...).willThrow(...)` form which does not require the static import).
+
+**Modify**:
+- `findAllReturnsBookingList` — assert `jsonPath("$[0].status").value("CREATED")`; optionally add `jsonPath("$[0].passengerPhone").value("+1-555-0100")`.
+- `findByIdReturnsBooking` — assert status `"CREATED"`.
+- `createReturns201WithLocationHeader` — unchanged structurally, uses updated `APOLLO`/`APOLLO_REQUEST`.
+- `createReturns400WhenMissingPassengerData` — change the literal `new BookingRequest(2L, "", "", BookingStatus.CONFIRMED)` to `new BookingRequest(2L, "", "", "")` (3 blank passenger fields, no status arg).
+
+**Add**:
+```java
+@Test
+void cancelReturnsCancelledBooking() throws Exception {
+  BookingResponse cancelled =
+      new BookingResponse(1L, 2L, "Falcon 9", DATE, "Ada Lovelace", "ada@example.com", "+1-555-0100", "CANCELLED");
+  given(service.cancel(1L)).willReturn(cancelled);
+
+  mvc.perform(patch("/api/bookings/1/cancel"))
+      .andExpect(status().isOk())
+      .andExpect(jsonPath("$.status").value("CANCELLED"));
+}
+
+@Test
+void cancelReturns404WhenNotFound() throws Exception {
+  given(service.cancel(99L)).willThrow(new ResponseStatusException(HttpStatus.NOT_FOUND));
+
+  mvc.perform(patch("/api/bookings/99/cancel")).andExpect(status().isNotFound());
+}
+```
+New static import needed: `org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch`.
+
+### 3.3 `back/src/test/java/dev/aiddbot/abjavareact/booking/BookingRepositoryTest.java`
+
+Update all `new Booking(launch, name, email, BookingStatus.X)` calls to the new 4-arg `(launch, name, email, phone)` constructor:
+- `persistsAndReadsBackBooking`: use `new Booking(launch, "Ada Lovelace", "ada@example.com", "+1-555-0100")`; add `assertThat(saved.getPassengerPhone()).isEqualTo("+1-555-0100")`; change the status assertion to `.isEqualTo(BookingStatus.CREATED)` (status can no longer be set to CONFIRMED/PAYED via the constructor).
+- `findsAllBookings`: replace both `new Booking(...)` calls with the new 4-arg form (distinct names/phones); status will be CREATED for both, which is fine since the test only asserts count.
+- `deletesBooking`: this exercises `repository.deleteById(...)` directly (repository-level capability, independent of the now-removed service `delete()`), so it can stay — just update the `new Booking(...)` call to the new constructor.
+
+---
+
+## 4. Frontend data layer
+
+### 4.1 `front/src/shared/types/booking.ts`
+```typescript
+export type BookingStatus = 'CREATED' | 'CANCELLED';
+
+export type Booking = {
+  id: number;
+  launchId: number;
+  launchRocketName: string;
+  launchDate: string;
+  passengerName: string;
+  passengerEmail: string;
+  passengerPhone: string;
+  status: BookingStatus;
+};
+
+export type BookingRequest = Omit<Booking, 'id' | 'launchRocketName' | 'launchDate' | 'status'>;
+```
+`BookingRequest` must NOT include `status` — status is server-controlled, always `CREATED` on create. Using `Omit` (rather than a hand-written type) keeps this consistent with `LaunchRequest`'s pattern in `launch.ts`, just with one more excluded key.
+
+### 4.2 `front/src/features/bookings/bookingsApi.ts`
+```typescript
+import { httpClient } from '../../shared/api/httpClient';
+import type { Booking, BookingRequest } from '../../shared/types/booking';
+
+export async function getBookings(): Promise<Booking[]> {
+  return httpClient.get<Booking[]>('/api/bookings');
+}
+
+export async function getBookingById(id: number): Promise<Booking> {
+  return httpClient.get<Booking>(`/api/bookings/${id}`);
+}
+
+export async function createBooking(request: BookingRequest): Promise<Booking> {
+  return httpClient.post<Booking>('/api/bookings', request);
+}
+
+export async function cancelBooking(id: number): Promise<Booking> {
+  return httpClient.patch<Booking>(`/api/bookings/${id}/cancel`);
+}
+```
+Remove `updateBooking`, `deleteBooking`. Keep `getBookingById` (cheap to keep, matches backend keeping `GET /{id}`, even if unused today by UI).
+
+### 4.3 `front/src/shared/api/httpClient.ts`
+Add a `patch` function. The cancel endpoint has no request body, so `patch` needs to support a no-body call (existing `request()` helper already supports `body === undefined`):
+```typescript
+async function patch<T>(path: string): Promise<T> {
+  return (await request('PATCH', path)).json() as T;
+}
+```
+Add `patch` to the exported object:
+```typescript
+export const httpClient = { get, post, put, patch, del };
+```
+Keep `put` in the exported object even though `bookingsApi.ts` no longer uses it — `launchesApi.ts`/`rocketsApi.ts` still use `httpClient.put`.
+
+Error-body surfacing: the spec's "surfaces a validation error" requirement is satisfied by the existing generic `Error('Request to {path} failed with status {code}')` thrown on non-2xx — **no redesign of httpClient error parsing is needed**. The booking form will catch and display `err.message` exactly as `LaunchList.tsx`'s `handleSubmit` already does. This keeps the change surgical and consistent with existing UX for Rocket/Launch forms.
+
+### 4.4 `front/src/features/bookings/useBookings.ts`
+No change required. It already wraps `getBookings()` and exposes `refresh()`. See section 5.2 for how cross-component refresh (booking created in `LaunchList`, must reflect in `BookingList`) is handled.
+
+---
+
+## 5. Frontend UI
+
+### 5.1 `front/src/features/bookings/BookingList.tsx` — becomes list-only, no create/edit form
+
+Remove: `showForm`, `editingId`, `form`, `formError`, `isSaving`, `launches` state, the `getLaunches` effect, `openCreate`, `openEdit`, `cancelForm`, `handleSubmit`, `formToRequest`, `bookingToForm`, the entire `<form>` JSX block, the "+ New Booking" header button, the Edit button, status dropdown.
+
+Keep: `useBookings()` for data/loading/error/refresh, loading/error/empty states (same JSX pattern), the table.
+
+Add: `cancellingId` state (disables the button mid-request; no confirmation step needed since spec doesn't require one for cancel, unlike delete). Add `passengerPhone` column. Replace Edit/Delete actions with a single Cancel button gated on `status === 'CREATED'`.
+
+```typescript
+import { useEffect, useState } from 'react';
+import { useBookings } from './useBookings';
+import { cancelBooking } from './bookingsApi';
+import './BookingList.css';
+
+type BookingListProps = {
+  refreshSignal?: number;
+};
+
+export function BookingList({ refreshSignal }: BookingListProps) {
+  const { data: bookings, error, isLoading, refresh } = useBookings();
+  const [cancellingId, setCancellingId] = useState<number | null>(null);
+  const [cancelError, setCancelError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (refreshSignal !== undefined) refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshSignal]);
+
+  async function handleCancel(id: number) {
+    setCancellingId(id);
+    setCancelError(null);
+    try {
+      await cancelBooking(id);
+      refresh();
+    } catch (err) {
+      setCancelError(err instanceof Error ? err.message : 'Cancel failed');
+    } finally {
+      setCancellingId(null);
+    }
+  }
+
+  // ...loading / error states unchanged (same JSX as today)...
+
+  return (
+    <section className="booking-section">
+      <header className="booking-header">
+        <h2 className="booking-title">Bookings</h2>
+      </header>
+
+      {cancelError && (
+        <p className="booking-form-error" role="alert" data-testid="cancel-error">
+          {cancelError}
+        </p>
+      )}
+
+      {bookings && bookings.length === 0 ? (
+        <p className="booking-empty" data-testid="bookings-empty">
+          No bookings yet. Book a seat on a launch to get started.
+        </p>
+      ) : (
+        <div className="booking-table-wrapper">
+          <table className="booking-table" data-testid="bookings-table">
+            <thead>
+              <tr>
+                <th>Passenger</th>
+                <th>Email</th>
+                <th>Phone</th>
+                <th>Launch</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {bookings?.map((booking) => (
+                <tr key={booking.id} data-testid={`booking-row-${booking.id}`}>
+                  <td className="booking-passenger">{booking.passengerName}</td>
+                  <td>{booking.passengerEmail}</td>
+                  <td>{booking.passengerPhone}</td>
+                  <td>{booking.launchRocketName} — {booking.launchDate}</td>
+                  <td>
+                    <span className={`booking-status booking-status--${booking.status.toLowerCase()}`}>
+                      {booking.status}
+                    </span>
+                  </td>
+                  <td className="booking-actions">
+                    {booking.status === 'CREATED' && (
+                      <button
+                        className="booking-btn booking-btn--danger"
+                        onClick={() => handleCancel(booking.id)}
+                        disabled={cancellingId === booking.id}
+                        data-testid={`cancel-btn-${booking.id}`}
+                      >
+                        {cancellingId === booking.id ? 'Cancelling…' : 'Cancel'}
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+```
+When `status === 'CANCELLED'`, the Actions cell renders nothing — satisfies "WHILE a booking's status is CANCELLED, THE frontend SHALL show it as cancelled and not offer cancellation again." The status badge already visibly shows CANCELLED via the existing `booking-status--cancelled` CSS class.
+
+CSS note: `BookingList.css` already defines `.booking-status--cancelled` (kept). Add a `.booking-status--created` rule (mirroring `.launch-status--created` from `LaunchList.css`) and remove the now-impossible `.booking-status--confirmed`/`.booking-status--payed` rules — small, directly-related cleanup since those classes are derived from `status.toLowerCase()` and the values no longer exist.
+
+### 5.2 Cross-component refresh problem (booking created in LaunchList, must show up in BookingList)
+
+`LaunchList` and `BookingList` are independent siblings in `App.tsx` with no shared state. If a booking is created from `LaunchList`'s new inline form, `BookingList`'s own `useBookings()` has no way to know to refetch.
+
+**Options considered**: (1) lift a refresh signal/callback through `App.tsx` props — minimal, no new infra; (2) global event bus/context — overkill for a 3-component app, rejected; (3) polling — wasteful, rejected; (4) do nothing — rejected, would visibly break the feature (new bookings wouldn't appear without a manual reload).
+
+**Recommendation: option 1.** `App.tsx` holds a `bookingsVersion` counter, increments it via a callback passed to `LaunchList` (`onBookingCreated`), and passes the counter down to `BookingList` as `refreshSignal`; `BookingList` calls `refresh()` whenever `refreshSignal` changes (see 5.1 above for the `useEffect`). This is the one piece of "new" wiring beyond what's explicitly spelled out in the task — flagged clearly because it's a necessary consequence of the already-decided "Book button moves into LaunchList" design choice, not a speculative addition.
+
+### 5.3 `front/src/features/launches/LaunchList.tsx` — add per-row "Book" action + inline form
+
+Add new imports:
+```typescript
+import { Fragment, useState, useEffect } from 'react';
+import { createBooking } from '../bookings/bookingsApi';
+import type { BookingRequest } from '../../shared/types/booking';
+```
+
+Add new local state (separate from the existing rocket-edit `FormState`/`editingId`/`showForm`, which stay untouched):
+```typescript
+type BookingFormState = {
+  passengerName: string;
+  passengerEmail: string;
+  passengerPhone: string;
+};
+
+const EMPTY_BOOKING_FORM: BookingFormState = {
+  passengerName: '',
+  passengerEmail: '',
+  passengerPhone: '',
+};
+```
+Component signature changes to accept a new prop:
+```typescript
+type LaunchListProps = {
+  onBookingCreated?: () => void;
+};
+
+export function LaunchList({ onBookingCreated }: LaunchListProps) {
+```
+Inside `LaunchList`, add:
+```typescript
+const [bookingLaunchId, setBookingLaunchId] = useState<number | null>(null);
+const [bookingForm, setBookingForm] = useState<BookingFormState>(EMPTY_BOOKING_FORM);
+const [bookingFormError, setBookingFormError] = useState<string | null>(null);
+const [isBookingSaving, setIsBookingSaving] = useState(false);
+
+function openBookingForm(launchId: number) {
+  setBookingLaunchId(launchId);
+  setBookingForm(EMPTY_BOOKING_FORM);
+  setBookingFormError(null);
+}
+
+function closeBookingForm() {
+  setBookingLaunchId(null);
+  setBookingFormError(null);
+}
+
+function handleBookingFieldChange(field: keyof BookingFormState, value: string) {
+  setBookingForm((prev) => ({ ...prev, [field]: value }));
+}
+
+async function handleBookingSubmit(e: React.FormEvent, launchId: number) {
+  e.preventDefault();
+  setBookingFormError(null);
+  setIsBookingSaving(true);
+  try {
+    const request: BookingRequest = { launchId, ...bookingForm };
+    await createBooking(request);
+    setBookingLaunchId(null);
+    onBookingCreated?.();
+  } catch (err) {
+    setBookingFormError(err instanceof Error ? err.message : 'Booking failed');
+  } finally {
+    setIsBookingSaving(false);
+  }
+}
+```
+
+In the table body, add a "Book" button to the Actions cell (alongside existing Edit/Delete):
+```jsx
+<td className="launch-actions">
+  {/* existing confirmDeleteId / Edit / Delete block unchanged */}
+  <button
+    className="launch-btn launch-btn--primary"
+    onClick={() => openBookingForm(launch.id)}
+    data-testid={`book-btn-${launch.id}`}
+  >
+    Book
+  </button>
+</td>
+```
+And render the inline form as a sibling `<tr>` directly below the launch row when `bookingLaunchId === launch.id`. Because `.map()` now needs to emit two sibling `<tr>` elements per launch, wrap each iteration in `<Fragment key={launch.id}>...</Fragment>`:
+```jsx
+{launches?.map((launch) => (
+  <Fragment key={launch.id}>
+    <tr data-testid={`launch-row-${launch.id}`}>
+      {/* existing row cells unchanged, including the Book button above */}
+    </tr>
+    {bookingLaunchId === launch.id && (
+      <tr data-testid={`booking-form-row-${launch.id}`}>
+        <td colSpan={5}>
+          <form
+            className="launch-booking-form"
+            onSubmit={(e) => handleBookingSubmit(e, launch.id)}
+            data-testid="booking-form"
+          >
+            <label className="launch-form-field">
+              <span>Passenger Name</span>
+              <input
+                type="text"
+                value={bookingForm.passengerName}
+                onChange={(e) => handleBookingFieldChange('passengerName', e.target.value)}
+                required
+                data-testid="field-passenger-name"
+              />
+            </label>
+            <label className="launch-form-field">
+              <span>Passenger Email</span>
+              <input
+                type="email"
+                value={bookingForm.passengerEmail}
+                onChange={(e) => handleBookingFieldChange('passengerEmail', e.target.value)}
+                required
+                data-testid="field-passenger-email"
+              />
+            </label>
+            <label className="launch-form-field">
+              <span>Passenger Phone</span>
+              <input
+                type="tel"
+                value={bookingForm.passengerPhone}
+                onChange={(e) => handleBookingFieldChange('passengerPhone', e.target.value)}
+                required
+                data-testid="field-passenger-phone"
+              />
+            </label>
+            {bookingFormError && (
+              <p className="launch-form-error" role="alert" data-testid="booking-form-error">
+                {bookingFormError}
+              </p>
+            )}
+            <div className="launch-form-actions">
+              <button type="button" className="launch-btn launch-btn--ghost" onClick={closeBookingForm} disabled={isBookingSaving}>
+                Cancel
+              </button>
+              <button type="submit" className="launch-btn launch-btn--primary" disabled={isBookingSaving} data-testid="booking-submit-btn">
+                {isBookingSaving ? 'Booking…' : 'Book Seat'}
+              </button>
+            </div>
+          </form>
+        </td>
+      </tr>
+    )}
+  </Fragment>
+))}
+```
+
+Test id naming: the new booking form uses **distinct** test ids from the existing launch edit/create form (`data-testid="booking-form-error"` and `data-testid="booking-submit-btn"`, NOT the existing form's `form-error`/`submit-btn`) because the two forms are independent UI surfaces that could in principle both be open simultaneously (user clicks Edit on one row and Book on another), which would make `screen.getByTestId('form-error')`/`getByTestId('submit-btn')` ambiguous in tests if shared. Final test ids for the new booking form:
+- `data-testid="booking-form"` (the form element)
+- `data-testid="field-passenger-name"`, `"field-passenger-email"`, `"field-passenger-phone"` (consistent with existing `field-<name>` convention)
+- `data-testid="booking-form-error"`
+- `data-testid="booking-submit-btn"`
+- `data-testid={`book-btn-${launch.id}`}` (the trigger button per row)
+- `data-testid={`booking-form-row-${launch.id}`}` (the conditional row wrapper, useful for scoping queries with `within()`)
+
+### 5.4 CSS additions: `front/src/features/launches/LaunchList.css`
+Add a minimal `.launch-booking-form` rule (container layout only — reuse existing `.launch-form-field`, `.launch-form-error`, `.launch-form-actions`, `.launch-btn` classes, no need to duplicate field/button styling):
+```css
+.launch-booking-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: flex-end;
+  padding: var(--space-2);
+}
+```
+
+### 5.5 `front/src/App.tsx`
+```typescript
+import { useState } from 'react';
+import { HealthStatus } from './features/health/HealthStatus';
+import { RocketList } from './features/rockets/RocketList';
+import { LaunchList } from './features/launches/LaunchList';
+import { BookingList } from './features/bookings/BookingList';
+import './App.css';
+
+function App() {
+  const [bookingsVersion, setBookingsVersion] = useState(0);
+
+  return (
+    <main className="app-shell">
+      <h1 className="app-hero">AstroBookings</h1>
+      <HealthStatus />
+      <RocketList />
+      <LaunchList onBookingCreated={() => setBookingsVersion((v) => v + 1)} />
+      <BookingList refreshSignal={bookingsVersion} />
+    </main>
+  );
+}
+
+export default App;
+```
+
+---
+
+## 6. Frontend tests
+
+### 6.1 `front/src/features/bookings/bookingsApi.test.ts` — needs rework
+- Update the `booking` fixture: `status: 'CREATED'`, add `passengerPhone: '+1-555-0100'`.
+- Remove tests: `updateBooking calls PUT ...`, `deleteBooking calls DELETE ...`.
+- Update `createBooking calls POST /api/bookings with payload` — destructuring now also needs to exclude `status` (since `BookingRequest` no longer includes it): `const { id: _id, launchRocketName: _rn, launchDate: _ld, status: _status, ...request } = booking;`
+- Add:
+  ```typescript
+  test('cancelBooking calls PATCH /api/bookings/:id/cancel', async () => {
+    const cancelled = { ...booking, status: 'CANCELLED' as const };
+    vi.mocked(httpClient.patch).mockResolvedValue(cancelled);
+
+    const result = await cancelBooking(1);
+
+    expect(httpClient.patch).toHaveBeenCalledWith('/api/bookings/1/cancel');
+    expect(result).toEqual(cancelled);
+  });
+  ```
+- Update the `vi.mock('../../shared/api/httpClient', ...)` factory to include `patch: vi.fn()`, and add `vi.mocked(httpClient.patch).mockReset();` to `beforeEach`.
+- `getBookings propagates client errors` stays unchanged.
+- Update the import line: `import { getBookings, getBookingById, createBooking, cancelBooking } from './bookingsApi';` (drop `updateBooking`, `deleteBooking`).
+
+### 6.2 `front/src/features/bookings/useBookings.test.ts`
+No functional change to the hook. Update the shared `booking` fixture (`status: 'CREATED'`, add `passengerPhone: '+1-555-0100'`). All four existing tests remain structurally valid since they only exercise `getBookings`/`refresh`, not booking-shape-specific logic.
+
+### 6.3 New file: `front/src/features/bookings/BookingList.test.tsx`
+No such file exists today — net-new (not a breaking-test fix), since `BookingList.tsx` is being substantially rewritten. Mirror `LaunchList.test.tsx`'s structure:
+```typescript
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { BookingList } from './BookingList';
+import { getBookings, cancelBooking } from './bookingsApi';
+import type { Booking } from '../../shared/types/booking';
+
+vi.mock('./bookingsApi', () => ({
+  getBookings: vi.fn(),
+  cancelBooking: vi.fn(),
+}));
+
+const created: Booking = {
+  id: 1,
+  launchId: 2,
+  launchRocketName: 'Falcon 9',
+  launchDate: '2027-06-15',
+  passengerName: 'Ada Lovelace',
+  passengerEmail: 'ada@example.com',
+  passengerPhone: '+1-555-0100',
+  status: 'CREATED',
+};
+
+const cancelled: Booking = { ...created, id: 2, status: 'CANCELLED' };
+
+beforeEach(() => {
+  vi.mocked(getBookings).mockReset();
+  vi.mocked(cancelBooking).mockReset();
+});
+
+test('shows a loading indicator while fetching', () => {
+  vi.mocked(getBookings).mockReturnValue(new Promise(() => {}));
+  render(<BookingList />);
+  expect(screen.getByTestId('bookings-loading')).toBeInTheDocument();
+});
+
+test('renders the bookings table with passenger details and status', async () => {
+  vi.mocked(getBookings).mockResolvedValue([created]);
+  render(<BookingList />);
+  expect(await screen.findByTestId('bookings-table')).toBeInTheDocument();
+  expect(screen.getByTestId('booking-row-1')).toBeInTheDocument();
+  expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
+  expect(screen.getByText('ada@example.com')).toBeInTheDocument();
+  expect(screen.getByText('+1-555-0100')).toBeInTheDocument();
+  expect(screen.getByText('CREATED')).toBeInTheDocument();
+});
+
+test('shows empty state when no bookings exist', async () => {
+  vi.mocked(getBookings).mockResolvedValue([]);
+  render(<BookingList />);
+  expect(await screen.findByTestId('bookings-empty')).toBeInTheDocument();
+});
+
+test('shows error state when fetch fails', async () => {
+  vi.mocked(getBookings).mockRejectedValue(new Error('network down'));
+  render(<BookingList />);
+  const error = await screen.findByTestId('bookings-error');
+  expect(error).toHaveAttribute('role', 'alert');
+  expect(error).toHaveTextContent(/network down/i);
+});
+
+test('shows a cancel button only for CREATED bookings', async () => {
+  vi.mocked(getBookings).mockResolvedValue([created, cancelled]);
+  render(<BookingList />);
+  await screen.findByTestId('bookings-table');
+  expect(screen.getByTestId('cancel-btn-1')).toBeInTheDocument();
+  expect(screen.queryByTestId('cancel-btn-2')).not.toBeInTheDocument();
+});
+
+test('cancels a booking and refreshes the list', async () => {
+  vi.mocked(getBookings).mockResolvedValueOnce([created]).mockResolvedValueOnce([cancelled]);
+  vi.mocked(cancelBooking).mockResolvedValue(cancelled);
+  const user = userEvent.setup();
+
+  render(<BookingList />);
+  await screen.findByTestId('bookings-table');
+
+  await user.click(screen.getByTestId('cancel-btn-1'));
+
+  await waitFor(() => expect(cancelBooking).toHaveBeenCalledWith(1));
+  expect(getBookings).toHaveBeenCalledTimes(2);
+});
+
+test('surfaces an error when cancel fails', async () => {
+  vi.mocked(getBookings).mockResolvedValue([created]);
+  vi.mocked(cancelBooking).mockRejectedValue(new Error('Booking not found: 1'));
+  const user = userEvent.setup();
+
+  render(<BookingList />);
+  await screen.findByTestId('bookings-table');
+
+  await user.click(screen.getByTestId('cancel-btn-1'));
+
+  expect(await screen.findByTestId('cancel-error')).toHaveTextContent(/booking not found/i);
+});
+
+test('refetches when refreshSignal prop changes', async () => {
+  vi.mocked(getBookings).mockResolvedValueOnce([created]).mockResolvedValueOnce([created, { ...created, id: 3 }]);
+  const { rerender } = render(<BookingList refreshSignal={0} />);
+  await screen.findByTestId('bookings-table');
+
+  rerender(<BookingList refreshSignal={1} />);
+
+  await waitFor(() => expect(getBookings).toHaveBeenCalledTimes(2));
+});
+```
+
+### 6.4 front/src/features/launches/LaunchList.test.tsx -- needs updates for the new Book action
+
+Existing tests (loading indicator, renders table, empty state, error state, opens the rocket/edit form, creates a launch, opens edit form pre-filled, shows confirmation before deleting) all stay valid as-is since the existing edit/create/delete machinery for launches is untouched.
+
+Add a mock for the booking API since LaunchList.tsx now imports createBooking:
+```typescript
+vi.mock('../bookings/bookingsApi', () => ({
+  createBooking: vi.fn(),
+}));
+```
+Import it: `import { createBooking } from '../bookings/bookingsApi';`, with `beforeEach` reset: `vi.mocked(createBooking).mockReset();`.
+
+Add new test cases:
+```typescript
+test('opens an inline booking form when Book is clicked', async () => {
+  vi.mocked(getLaunches).mockResolvedValue([apollo]);
+  const user = userEvent.setup();
+
+  render(<LaunchList />);
+  await screen.findByTestId('launches-table');
+
+  await user.click(screen.getByTestId('book-btn-1'));
+
+  expect(screen.getByTestId('booking-form')).toBeInTheDocument();
+  expect(screen.getByTestId('field-passenger-name')).toBeInTheDocument();
+  expect(screen.getByTestId('field-passenger-email')).toBeInTheDocument();
+  expect(screen.getByTestId('field-passenger-phone')).toBeInTheDocument();
+});
+
+test('submits a booking for the selected launch and notifies the parent', async () => {
+  vi.mocked(getLaunches).mockResolvedValue([apollo]);
+  vi.mocked(createBooking).mockResolvedValue({
+    id: 1,
+    launchId: 1,
+    launchRocketName: 'Falcon 9',
+    launchDate: '2027-06-15',
+    passengerName: 'Ada Lovelace',
+    passengerEmail: 'ada@example.com',
+    passengerPhone: '+1-555-0100',
+    status: 'CREATED',
+  });
+  const onBookingCreated = vi.fn();
+  const user = userEvent.setup();
+
+  render(<LaunchList onBookingCreated={onBookingCreated} />);
+  await screen.findByTestId('launches-table');
+
+  await user.click(screen.getByTestId('book-btn-1'));
+  await user.type(screen.getByTestId('field-passenger-name'), 'Ada Lovelace');
+  await user.type(screen.getByTestId('field-passenger-email'), 'ada@example.com');
+  await user.type(screen.getByTestId('field-passenger-phone'), '+1-555-0100');
+  await user.click(screen.getByTestId('booking-submit-btn'));
+
+  await waitFor(() =>
+    expect(createBooking).toHaveBeenCalledWith({
+      launchId: 1,
+      passengerName: 'Ada Lovelace',
+      passengerEmail: 'ada@example.com',
+      passengerPhone: '+1-555-0100',
+    }),
+  );
+  expect(onBookingCreated).toHaveBeenCalled();
+});
+
+test('surfaces a validation error when the booking request fails', async () => {
+  vi.mocked(getLaunches).mockResolvedValue([apollo]);
+  vi.mocked(createBooking).mockRejectedValue(new Error('Request to /api/bookings failed with status 400'));
+  const user = userEvent.setup();
+
+  render(<LaunchList />);
+  await screen.findByTestId('launches-table');
+
+  await user.click(screen.getByTestId('book-btn-1'));
+  await user.type(screen.getByTestId('field-passenger-name'), 'Ada Lovelace');
+  await user.type(screen.getByTestId('field-passenger-email'), 'ada@example.com');
+  await user.type(screen.getByTestId('field-passenger-phone'), '+1-555-0100');
+  await user.click(screen.getByTestId('booking-submit-btn'));
+
+  expect(await screen.findByTestId('booking-form-error')).toHaveTextContent(/400/);
+});
+```
+Note: HTML5 required attributes do not reliably block jsdom/Testing-Library-driven submits the way a real browser blocks them, so the validation-error test above mocks a 400 rejection from createBooking rather than relying on native required-field blocking -- this is the correct way to test the server-side validation surfacing path (mirrors how createReturns400WhenMissingPassengerData is tested on the backend side).
+
+### 6.5 No changes needed
+front/src/features/launches/launchesApi.test.ts, useLaunches.test.ts, and everything under front/src/features/rockets/** are untouched by this feature.
+
+---
+
+## 7. Sequencing -- recommended implementation order
+
+Backend first (compiles and is independently testable), then frontend, keeping the app buildable/testable at each checkpoint:
+
+1. Backend data model: BookingStatus.java -> Booking.java (constructor + cancel() + remove dead setters) -> BookingRequest.java -> BookingResponse.java. The backend will NOT compile yet after this step alone (service/controller/tests still reference old shapes) -- expected, since steps 2-3 immediately follow before running tests.
+2. Backend service + controller: BookingService.java (validate/create/cancel, remove update/delete) -> BookingController.java (add PATCH /cancel, remove PUT/DELETE). Main backend source now compiles cleanly.
+3. Backend tests: BookingServiceTest.java -> BookingControllerTest.java -> BookingRepositoryTest.java. Run mvnw.cmd test -- should be green for the booking package; Rocket/Launch suites unaffected.
+4. Frontend types + API layer: booking.ts -> httpClient.ts (add patch) -> bookingsApi.ts (remove update/delete, add cancel). BookingList.tsx/LaunchList.tsx will fail to typecheck at this point (still referencing removed functions/old types) -- expected transient state, immediately followed by step 5.
+5. Frontend components: BookingList.tsx rewrite -> LaunchList.tsx (Book button, inline form, onBookingCreated prop) -> LaunchList.css (new .launch-booking-form rule) -> prune dead .booking-status--confirmed/--payed from BookingList.css -> App.tsx (wire bookingsVersion/refreshSignal/onBookingCreated). Run npm run build -- should compile cleanly.
+6. Frontend tests: bookingsApi.test.ts -> useBookings.test.ts (fixture-only update) -> new BookingList.test.tsx -> LaunchList.test.tsx (add Book-flow tests + bookingsApi mock). Run npm run test.
+7. Lint pass: npm run lint on frontend; fix any unused-import/unused-variable flags surfaced by the removals (e.g. leftover BookingStatus literal CONFIRMED/PAYED references, leftover Mockito then/willThrow/willDoNothing imports on the backend side per section 3).
+8. Manual smoke test (see section 8).
+
+Practical grouping: do steps 1+2+3 as one atomic unit before moving to frontend (do not try to run backend tests mid-step-1, since BookingServiceTest still references the old constructor until step 3 catches up). Likewise steps 4+5+6 as one atomic unit for frontend. Only the start (current main) and end (fully done) states, plus the boundary between backend-done/frontend-not-started, need to build cleanly -- that boundary is a safe point to pause/commit.
+
+---
+
+## 8. Verification steps
+
+1. Backend tests: from back/, run mvnw.cmd test. Confirm BookingServiceTest, BookingControllerTest, BookingRepositoryTest all pass, and RocketServiceTest/RocketControllerTest/LaunchServiceTest/LaunchControllerTest/HealthServiceTest etc. remain green (Booking only depends on Launch, not vice versa, so no incidental breakage expected).
+2. Frontend build: from front/, run npm run build -- confirm no TypeScript errors across changed files and their consumers.
+3. Frontend lint: npm run lint -- confirm no unused-import/unused-var errors from removed code paths (updateBooking, deleteBooking, old BookingStatus literal values).
+4. Frontend unit tests: npm run test (Vitest) -- confirm all suites pass, including new BookingList.test.tsx and updated LaunchList.test.tsx/bookingsApi.test.ts/useBookings.test.ts.
+5. Manual smoke test (no Playwright -- manual only):
+   - Start backend (mvnw.cmd spring-boot:run from back/) and frontend (npm run dev from front/).
+   - Ensure at least one Rocket and one Launch exist (create via UI if no dev seed data exists).
+   - In the browser: on the Launches table, click Book on a launch row, fill name/email/phone, submit; confirm the inline form closes and a new row appears in the Bookings table with status CREATED and the phone visible.
+   - Verify 400 on missing fields directly against the API with a curl POST to /api/bookings with blank passengerName/passengerEmail/passengerPhone.
+   - Click Cancel on the new booking row; confirm the status badge changes to CANCELLED and the Cancel button disappears for that row.
+   - curl PATCH to /api/bookings/99999/cancel -> confirm 404.
+   - curl PUT and DELETE to /api/bookings/1 -> confirm 405 Method Not Allowed (no longer mapped), proving the removal took effect.
+
+---
+
+## Summary of files touched
+
+Backend:
+- back/src/main/java/dev/aiddbot/abjavareact/booking/BookingStatus.java
+- back/src/main/java/dev/aiddbot/abjavareact/booking/Booking.java
+- back/src/main/java/dev/aiddbot/abjavareact/booking/BookingRequest.java
+- back/src/main/java/dev/aiddbot/abjavareact/booking/BookingResponse.java
+- back/src/main/java/dev/aiddbot/abjavareact/booking/BookingService.java
+- back/src/main/java/dev/aiddbot/abjavareact/booking/BookingController.java
+- back/src/test/java/dev/aiddbot/abjavareact/booking/BookingServiceTest.java
+- back/src/test/java/dev/aiddbot/abjavareact/booking/BookingControllerTest.java
+- back/src/test/java/dev/aiddbot/abjavareact/booking/BookingRepositoryTest.java
+
+Frontend:
+- front/src/shared/types/booking.ts
+- front/src/shared/api/httpClient.ts
+- front/src/features/bookings/bookingsApi.ts
+- front/src/features/bookings/bookingsApi.test.ts
+- front/src/features/bookings/useBookings.test.ts
+- front/src/features/bookings/BookingList.tsx
+- front/src/features/bookings/BookingList.css
+- front/src/features/bookings/BookingList.test.tsx (new)
+- front/src/features/launches/LaunchList.tsx
+- front/src/features/launches/LaunchList.css
+- front/src/features/launches/LaunchList.test.tsx
+- front/src/App.tsx
+
+Not touched (confirmed out of scope): front/src/features/rockets/**, back/.../rocket/**, back/.../launch/** (consumed read-only via LaunchRepository/Launch getters, no changes needed there), any .product/specs/*.spec.e2e.md or Playwright test files.

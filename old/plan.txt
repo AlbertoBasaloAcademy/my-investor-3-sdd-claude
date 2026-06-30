@@ -1,0 +1,131 @@
+# Booking Feature Redesign — Implementation Plan
+
+## Context
+
+`.product/specs/booking.spec.md` replaces the current payment-oriented `Booking` model
+(`passengerName`/`passengerEmail` + status `CONFIRMED|CANCELLED|PAYED`) with a simple
+reservation lifecycle: a visitor books a launch with name, email, **phone** (new field),
+and the booking starts `CREATED` and may only move to `CANCELLED`, never back. The spec's
+backend API only calls for create / list / cancel — no generic update or delete — and the
+frontend should let a visitor book directly from a launch and cancel from the bookings list.
+
+Confirmed design decisions (already agreed with user):
+1. **Per-launch "Book" button** — `LaunchList` gets a per-row Book action that opens an
+   inline form scoped to that launch, replacing today's standalone form with a launch
+   dropdown in `BookingList`.
+2. **Remove PUT/DELETE** on bookings; replace with a dedicated
+   `PATCH /api/bookings/{id}/cancel` action. No generic update/delete code path remains,
+   so a client can never set an arbitrary status.
+
+Scope: backend + frontend code + unit tests only. No Playwright/e2e work (out of scope for
+this pass per the `/codify` skill instructions).
+
+---
+
+## 1. Backend data model
+
+- `booking/BookingStatus.java`: enum becomes `CREATED, CANCELLED` (drop `CONFIRMED`, `PAYED`).
+- `booking/Booking.java`:
+  - Add `passengerPhone` field (`@Column(name = "passenger_phone", nullable = false)`).
+  - Change constructor to `Booking(Launch launch, String passengerName, String passengerEmail, String passengerPhone)` and have it set `this.status = BookingStatus.CREATED` internally — the entity itself guarantees "a new booking always starts CREATED," not just the service.
+  - Replace `setStatus(...)` with a `cancel()` method (`this.status = BookingStatus.CANCELLED;`) — the only way status can change post-creation.
+  - Delete the now-unused setters `setLaunch`, `setPassengerName`, `setPassengerEmail` (no caller once `update()` is removed). Keep the no-arg protected constructor for Hibernate, getters, and add `getPassengerPhone()`.
+- `booking/BookingRequest.java`: drop `status` (server-controlled), add `passengerPhone`:
+  `record BookingRequest(Long launchId, String passengerName, String passengerEmail, String passengerPhone)`.
+- `booking/BookingResponse.java`: add `passengerPhone` after `passengerEmail`.
+- `booking/BookingRepository.java`: unchanged.
+
+## 2. Backend API
+
+Final endpoint list: `GET /api/bookings`, `GET /api/bookings/{id}` (kept — no reason to remove), `POST /api/bookings`, and new `PATCH /api/bookings/{id}/cancel`. Remove `PUT /api/bookings/{id}` and `DELETE /api/bookings/{id}`.
+
+`booking/BookingService.java`:
+- Remove `update()`, `delete()`.
+- `create()`: validate, look up launch via existing `findLaunch()`, build `Booking` via the new 4-arg constructor (status is no longer taken from the request).
+- `validate()`: keep null/blank checks for `launchId`, `passengerName`, `passengerEmail`; replace the old `status == null` check with a blank check on `passengerPhone` (all four → 400 via `ResponseStatusException`, same convention used everywhere else in the codebase — no `@ControllerAdvice` exists and none should be introduced).
+- New `cancel(Long id)`:
+  ```java
+  public BookingResponse cancel(Long id) {
+    Booking booking = repository.findById(id)
+        .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Booking not found: " + id));
+    booking.cancel();
+    return toResponse(repository.save(booking));
+  }
+  ```
+  No extra guard for double-cancel (CANCELLED→CANCELLED isn't a backward transition, and the UI gates the button on `status === 'CREATED'` anyway) — keep it minimal, no speculative checks the spec doesn't ask for.
+- `toResponse()`: include `passengerPhone`.
+
+`booking/BookingController.java`: remove `@PutMapping`/`@DeleteMapping` handlers, add
+`@PatchMapping("/{id}/cancel") public BookingResponse cancel(@PathVariable Long id)`.
+
+## 3. Backend tests
+
+`BookingServiceTest.java`, `BookingControllerTest.java`, `BookingRepositoryTest.java` (mirror existing Mockito + AssertJ + given/when/then style used throughout, e.g. `RocketServiceTest.java`):
+- Update all `BookingRequest`/`Booking` literals to the new 4-arg shape; change status assertions from `"CONFIRMED"` to `"CREATED"`.
+- Remove tests for `update`/`delete` and the old `createThrows400WhenStatusIsNull`.
+- Add `createThrows400WhenPassengerPhoneIsBlank`.
+- Add `cancelTransitionsCreatedBookingToCancelledAndPersists` and `cancelThrows404WhenNotFound` at the service level, plus `cancelReturnsCancelledBooking`/`cancelReturns404WhenNotFound` at the controller level (`MockMvcRequestBuilders.patch`).
+- `BookingRepositoryTest`: update `new Booking(...)` calls to the 4-arg constructor; assert `getPassengerPhone()` and that a freshly persisted booking has `BookingStatus.CREATED`.
+- Drop now-unused imports (`delete`/`put` static request builders, `willDoNothing` for the removed delete tests).
+
+## 4. Frontend data layer
+
+- `shared/types/booking.ts`: `BookingStatus = 'CREATED' | 'CANCELLED'`; add `passengerPhone: string` to `Booking`; `BookingRequest = Omit<Booking, 'id' | 'launchRocketName' | 'launchDate' | 'status'>` (status is never client-settable).
+- `shared/api/httpClient.ts`: add a no-body `patch<T>(path)` function (reuses the existing `request()` helper, which already supports `body === undefined`); export it alongside `get/post/put/del`. No redesign of error-body parsing — the existing generic `Error('Request to {path} failed with status {code}')` is enough to satisfy "surfaces a validation error" (matches how Launch/Rocket forms already display errors).
+- `features/bookings/bookingsApi.ts`: remove `updateBooking`/`deleteBooking`; add `cancelBooking(id) => httpClient.patch<Booking>(\`/api/bookings/${id}/cancel\`)`. Keep `getBookingById` (cheap, matches backend keeping the single-resource GET).
+- `features/bookings/useBookings.ts`: unchanged (already exposes `refresh()`).
+
+## 5. Frontend UI
+
+**`features/bookings/BookingList.tsx`** becomes list-only:
+- Remove all create/edit form state and JSX (`showForm`, `editingId`, `form`, `formError`, `isSaving`, the `getLaunches` effect, `formToRequest`/`bookingToForm`, the launch dropdown, the status dropdown, Edit/Delete buttons).
+- Keep `useBookings()` for data/loading/error/refresh and the existing loading/empty/error JSX pattern.
+- Add a `passengerPhone` column, and replace the actions cell with a single Cancel button rendered only `when status === 'CREATED'` (renders nothing for `CANCELLED` rows — satisfies "show as cancelled and not offer cancellation again"). Track `cancellingId`/`cancelError` local state; on click, call `cancelBooking(id)` then `refresh()`.
+- Accept an optional `refreshSignal?: number` prop; a `useEffect` keyed on it calls `refresh()` — needed because booking creation now happens inside `LaunchList`, a sibling component with no shared state otherwise.
+
+**`features/launches/LaunchList.tsx`** gains a per-row "Book" action:
+- New local state scoped to booking (`bookingLaunchId`, `bookingForm` {passengerName, passengerEmail, passengerPhone}, `bookingFormError`, `isBookingSaving`) — separate from the existing rocket-edit form state, which stays untouched.
+- A "Book" button per row (`data-testid="book-btn-{id}"`) opens an inline form rendered as a sibling `<tr>` directly below that launch's row (wrap each `.map()` iteration in a `<Fragment key={launch.id}>` since each iteration now emits two `<tr>`s).
+- On submit: `createBooking({ launchId, ...bookingForm })`; on success, close the form and call the new `onBookingCreated?: () => void` prop; on failure, show `bookingFormError` (mirrors the existing `handleSubmit` try/catch pattern already used for rockets/launches).
+- Use distinct test ids from the existing launch form (`booking-form`, `booking-form-error`, `booking-submit-btn`, `field-passenger-name/email/phone`) since both forms could in principle be open at once.
+
+**`App.tsx`**: holds a `bookingsVersion` counter; passes `onBookingCreated={() => setBookingsVersion(v => v+1)}` to `LaunchList` and `refreshSignal={bookingsVersion}` to `BookingList`. This is the one bit of new cross-component wiring required by moving booking-creation into `LaunchList`.
+
+**CSS**: add `.booking-status--created` and a minimal `.launch-booking-form` layout rule (reusing existing `.launch-form-field/.launch-form-error/.launch-form-actions/.launch-btn` classes); remove the now-dead `.booking-status--confirmed`/`--payed` rules from `BookingList.css`.
+
+## 6. Frontend tests
+
+- `bookingsApi.test.ts`: update fixtures (status `CREATED`, add `passengerPhone`), remove update/delete tests, add a `cancelBooking calls PATCH .../cancel` test, mock `httpClient.patch`.
+- `useBookings.test.ts`: fixture-only update (no behavior change).
+- New `BookingList.test.tsx` (the component is rewritten, so this is a new file, not a patch): loading/empty/error states, table renders phone + status, Cancel button shown only for `CREATED` rows, clicking Cancel calls `cancelBooking` and refetches, cancel-failure shows an error, `refreshSignal` prop change triggers a refetch. Mirror `LaunchList.test.tsx`'s Vitest/Testing-Library conventions and `data-testid` patterns.
+- `LaunchList.test.tsx`: existing tests stay valid; add a mock for `../bookings/bookingsApi`, plus new tests: clicking Book opens the inline form with the three fields, submitting calls `createBooking` with the right payload and invokes `onBookingCreated`, and a failed `createBooking` call surfaces the error text in `booking-form-error` (don't rely on native `required` blocking submission in jsdom — test the 400-rejection path directly, same way the backend tests the validation).
+- No changes needed for `rockets/**` or `launchesApi.test.ts`/`useLaunches.test.ts`.
+
+## 7. Sequencing
+
+1. Backend data model (`BookingStatus` → `Booking` → `BookingRequest`/`BookingResponse`) — expect a transient non-compiling state until step 2 lands.
+2. Backend service + controller (`BookingService`, `BookingController`) — main source compiles again.
+3. Backend tests — run `mvnw.cmd test`, should be green for `booking`, unaffected for `rocket`/`launch`.
+4. Frontend types + API layer (`booking.ts`, `httpClient.ts`, `bookingsApi.ts`) — expect a transient typecheck failure in components until step 5.
+5. Frontend components (`BookingList.tsx`, `LaunchList.tsx`, CSS, `App.tsx`) — run `npm run build`.
+6. Frontend tests (`bookingsApi.test.ts`, `useBookings.test.ts`, new `BookingList.test.tsx`, `LaunchList.test.tsx`) — run `npm run test`.
+7. `npm run lint` — clean up any unused-import fallout from the removals.
+8. Manual smoke test (below).
+
+Safe pause point: after step 3 (backend fully done and green) before starting frontend work.
+
+## 8. Verification
+
+- `mvnw.cmd test` (from `back/`) — booking suite green, rocket/launch/health suites unaffected.
+- `npm run build` (from `front/`) — no TS errors.
+- `npm run lint` — no unused-import/var errors.
+- `npm run test` (Vitest) — all suites pass.
+- Manual smoke test (no Playwright): start both servers; on the Launches table click **Book** on a row, fill name/email/phone, submit — confirm it appears in the Bookings table as `CREATED` with phone visible; curl `POST /api/bookings` with blank fields → `400`; click **Cancel** on that booking → status flips to `CANCELLED`, button disappears; curl `PATCH /api/bookings/99999/cancel` → `404`; curl `PUT`/`DELETE` on `/api/bookings/1` → `405` (confirms removal took effect).
+
+## Files touched
+
+Backend: `booking/BookingStatus.java`, `Booking.java`, `BookingRequest.java`, `BookingResponse.java`, `BookingService.java`, `BookingController.java`, and their three test files.
+
+Frontend: `shared/types/booking.ts`, `shared/api/httpClient.ts`, `features/bookings/bookingsApi.ts` (+ its test), `features/bookings/useBookings.test.ts`, `features/bookings/BookingList.tsx` (+ new test), `features/bookings/BookingList.css`, `features/launches/LaunchList.tsx` (+ test), `features/launches/LaunchList.css`, `App.tsx`.
+
+Not touched: `rockets/**` (front + back), `back/.../launch/**` (consumed read-only), any Playwright/e2e files.
