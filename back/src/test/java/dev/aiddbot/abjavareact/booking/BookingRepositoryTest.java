@@ -36,7 +36,7 @@ class BookingRepositoryTest {
   @Test
   void persistsAndReadsBackBooking() {
     Launch launch = savedLaunch();
-    Booking booking = new Booking(launch, "Ada Lovelace", "ada@example.com", BookingStatus.CONFIRMED);
+    Booking booking = new Booking(launch, "Ada Lovelace", "ada@example.com", "555-0100");
 
     Booking saved = repository.save(booking);
 
@@ -44,26 +44,27 @@ class BookingRepositoryTest {
     assertThat(saved.getLaunch().getId()).isEqualTo(launch.getId());
     assertThat(saved.getPassengerName()).isEqualTo("Ada Lovelace");
     assertThat(saved.getPassengerEmail()).isEqualTo("ada@example.com");
-    assertThat(saved.getStatus()).isEqualTo(BookingStatus.CONFIRMED);
+    assertThat(saved.getPassengerPhone()).isEqualTo("555-0100");
+    assertThat(saved.getStatus()).isEqualTo(BookingStatus.CREATED);
   }
 
   @Test
   void findsAllBookings() {
     Launch launch = savedLaunch();
-    repository.save(new Booking(launch, "Ada Lovelace", "ada@example.com", BookingStatus.CONFIRMED));
-    repository.save(new Booking(launch, "Grace Hopper", "grace@example.com", BookingStatus.PAYED));
+    repository.save(new Booking(launch, "Ada Lovelace", "ada@example.com", "555-0100"));
+    repository.save(new Booking(launch, "Grace Hopper", "grace@example.com", "555-0200"));
 
     assertThat(repository.findAll()).hasSize(2);
   }
 
   @Test
-  void deletesBooking() {
+  void persistsCancelledBooking() {
     Launch launch = savedLaunch();
-    Booking saved =
-        repository.save(new Booking(launch, "Ada Lovelace", "ada@example.com", BookingStatus.CONFIRMED));
+    Booking booking = new Booking(launch, "Ada Lovelace", "ada@example.com", "555-0100");
+    booking.setStatus(BookingStatus.CANCELLED);
 
-    repository.deleteById(saved.getId());
+    Booking saved = repository.save(booking);
 
-    assertThat(repository.findById(saved.getId())).isEmpty();
+    assertThat(saved.getStatus()).isEqualTo(BookingStatus.CANCELLED);
   }
 }

@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
-import static org.mockito.BDDMockito.then;
 
 import dev.aiddbot.abjavareact.launch.Launch;
 import dev.aiddbot.abjavareact.launch.LaunchRepository;
@@ -35,10 +34,10 @@ class BookingServiceTest {
   private static final Launch LAUNCH =
       new Launch(ROCKET, LocalDate.now().plusMonths(3), new BigDecimal("50000"), LaunchStatus.CREATED);
   private static final BookingRequest REQUEST =
-      new BookingRequest(1L, "Ada Lovelace", "ada@example.com", BookingStatus.CONFIRMED);
+      new BookingRequest(1L, "Ada Lovelace", "ada@example.com", "555-0100");
 
   private Booking newBooking() {
-    return new Booking(LAUNCH, "Ada Lovelace", "ada@example.com", BookingStatus.CONFIRMED);
+    return new Booking(LAUNCH, "Ada Lovelace", "ada@example.com", "555-0100");
   }
 
   @Test
@@ -48,7 +47,7 @@ class BookingServiceTest {
     List<BookingResponse> result = service.findAll();
 
     assertThat(result).hasSize(1);
-    assertThat(result.get(0).status()).isEqualTo("CONFIRMED");
+    assertThat(result.get(0).status()).isEqualTo("CREATED");
     assertThat(result.get(0).launchRocketName()).isEqualTo("Falcon 9");
   }
 
@@ -59,7 +58,8 @@ class BookingServiceTest {
     BookingResponse result = service.findById(1L);
 
     assertThat(result.passengerName()).isEqualTo("Ada Lovelace");
-    assertThat(result.status()).isEqualTo("CONFIRMED");
+    assertThat(result.passengerPhone()).isEqualTo("555-0100");
+    assertThat(result.status()).isEqualTo("CREATED");
   }
 
   @Test
@@ -78,14 +78,15 @@ class BookingServiceTest {
 
     BookingResponse result = service.create(REQUEST);
 
-    assertThat(result.status()).isEqualTo("CONFIRMED");
+    assertThat(result.status()).isEqualTo("CREATED");
     assertThat(result.passengerName()).isEqualTo("Ada Lovelace");
     assertThat(result.passengerEmail()).isEqualTo("ada@example.com");
+    assertThat(result.passengerPhone()).isEqualTo("555-0100");
   }
 
   @Test
   void createThrows400WhenLaunchIdIsNull() {
-    BookingRequest bad = new BookingRequest(null, "Ada Lovelace", "ada@example.com", BookingStatus.CONFIRMED);
+    BookingRequest bad = new BookingRequest(null, "Ada Lovelace", "ada@example.com", "555-0100");
 
     assertThatThrownBy(() -> service.create(bad))
         .isInstanceOf(ResponseStatusException.class)
@@ -94,7 +95,7 @@ class BookingServiceTest {
 
   @Test
   void createThrows400WhenPassengerNameIsBlank() {
-    BookingRequest bad = new BookingRequest(1L, "  ", "ada@example.com", BookingStatus.CONFIRMED);
+    BookingRequest bad = new BookingRequest(1L, "  ", "ada@example.com", "555-0100");
 
     assertThatThrownBy(() -> service.create(bad))
         .isInstanceOf(ResponseStatusException.class)
@@ -103,7 +104,7 @@ class BookingServiceTest {
 
   @Test
   void createThrows400WhenPassengerEmailIsBlank() {
-    BookingRequest bad = new BookingRequest(1L, "Ada Lovelace", "", BookingStatus.CONFIRMED);
+    BookingRequest bad = new BookingRequest(1L, "Ada Lovelace", "", "555-0100");
 
     assertThatThrownBy(() -> service.create(bad))
         .isInstanceOf(ResponseStatusException.class)
@@ -111,8 +112,8 @@ class BookingServiceTest {
   }
 
   @Test
-  void createThrows400WhenStatusIsNull() {
-    BookingRequest bad = new BookingRequest(1L, "Ada Lovelace", "ada@example.com", null);
+  void createThrows400WhenPassengerPhoneIsBlank() {
+    BookingRequest bad = new BookingRequest(1L, "Ada Lovelace", "ada@example.com", "");
 
     assertThatThrownBy(() -> service.create(bad))
         .isInstanceOf(ResponseStatusException.class)
@@ -129,42 +130,20 @@ class BookingServiceTest {
   }
 
   @Test
-  void updateAppliesAllFieldsAndPersists() {
+  void cancelSetsStatusAndPersists() {
     given(repository.findById(1L)).willReturn(Optional.of(newBooking()));
-    given(launchRepository.findById(1L)).willReturn(Optional.of(LAUNCH));
     given(repository.save(any())).willAnswer(inv -> inv.getArgument(0));
-    BookingRequest updated =
-        new BookingRequest(1L, "Grace Hopper", "grace@example.com", BookingStatus.PAYED);
 
-    BookingResponse result = service.update(1L, updated);
+    BookingResponse result = service.cancel(1L);
 
-    assertThat(result.passengerName()).isEqualTo("Grace Hopper");
-    assertThat(result.status()).isEqualTo("PAYED");
+    assertThat(result.status()).isEqualTo("CANCELLED");
   }
 
   @Test
-  void updateThrows404WhenNotFound() {
+  void cancelThrows404WhenNotFound() {
     given(repository.findById(99L)).willReturn(Optional.empty());
 
-    assertThatThrownBy(() -> service.update(99L, REQUEST))
-        .isInstanceOf(ResponseStatusException.class)
-        .hasMessageContaining("404");
-  }
-
-  @Test
-  void deleteRemovesExistingBooking() {
-    given(repository.existsById(1L)).willReturn(true);
-
-    service.delete(1L);
-
-    then(repository).should().deleteById(1L);
-  }
-
-  @Test
-  void deleteThrows404WhenNotFound() {
-    given(repository.existsById(99L)).willReturn(false);
-
-    assertThatThrownBy(() -> service.delete(99L))
+    assertThatThrownBy(() -> service.cancel(99L))
         .isInstanceOf(ResponseStatusException.class)
         .hasMessageContaining("404");
   }

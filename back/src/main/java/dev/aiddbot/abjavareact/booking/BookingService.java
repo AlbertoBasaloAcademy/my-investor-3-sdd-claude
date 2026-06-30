@@ -34,30 +34,19 @@ public class BookingService {
     validate(request);
     Launch launch = findLaunch(request.launchId());
     Booking booking =
-        new Booking(launch, request.passengerName(), request.passengerEmail(), request.status());
+        new Booking(
+            launch, request.passengerName(), request.passengerEmail(), request.passengerPhone());
     return toResponse(repository.save(booking));
   }
 
-  public BookingResponse update(Long id, BookingRequest request) {
-    validate(request);
+  public BookingResponse cancel(Long id) {
     Booking booking =
         repository
             .findById(id)
             .orElseThrow(
                 () -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Booking not found: " + id));
-    Launch launch = findLaunch(request.launchId());
-    booking.setLaunch(launch);
-    booking.setPassengerName(request.passengerName());
-    booking.setPassengerEmail(request.passengerEmail());
-    booking.setStatus(request.status());
+    booking.setStatus(BookingStatus.CANCELLED);
     return toResponse(repository.save(booking));
-  }
-
-  public void delete(Long id) {
-    if (!repository.existsById(id)) {
-      throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Booking not found: " + id);
-    }
-    repository.deleteById(id);
   }
 
   private Launch findLaunch(Long launchId) {
@@ -77,8 +66,8 @@ public class BookingService {
     if (request.passengerEmail() == null || request.passengerEmail().isBlank()) {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Passenger email is required");
     }
-    if (request.status() == null) {
-      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Status is required");
+    if (request.passengerPhone() == null || request.passengerPhone().isBlank()) {
+      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Passenger phone is required");
     }
   }
 
@@ -90,6 +79,7 @@ public class BookingService {
         booking.getLaunch().getDate(),
         booking.getPassengerName(),
         booking.getPassengerEmail(),
+        booking.getPassengerPhone(),
         booking.getStatus().name());
   }
 }

@@ -9,4 +9,5 @@ public record BookingResponse(
     LocalDate launchDate,
     String passengerName,
     String passengerEmail,
+    String passengerPhone,
     String status) {}

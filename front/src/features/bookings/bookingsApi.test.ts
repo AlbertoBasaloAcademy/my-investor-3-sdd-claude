@@ -1,4 +1,4 @@
-import { getBookings, getBookingById, createBooking, updateBooking, deleteBooking } from './bookingsApi';
+import { getBookings, getBookingById, createBooking, cancelBooking } from './bookingsApi';
 import { httpClient } from '../../shared/api/httpClient';
 import type { Booking } from '../../shared/types/booking';
 
@@ -13,7 +13,8 @@ const booking: Booking = {
   launchDate: '2027-06-15',
   passengerName: 'Ada Lovelace',
   passengerEmail: 'ada@example.com',
-  status: 'CONFIRMED',
+  passengerPhone: '+1 555 0100',
+  status: 'CREATED',
 };
 
 beforeEach(() => {
@@ -42,7 +43,7 @@ test('getBookingById calls GET /api/bookings/:id', async () => {
 });
 
 test('createBooking calls POST /api/bookings with payload', async () => {
-  const { id: _id, launchRocketName: _rn, launchDate: _ld, ...request } = booking;
+  const { id: _id, launchRocketName: _rn, launchDate: _ld, status: _status, ...request } = booking;
   vi.mocked(httpClient.post).mockResolvedValue(booking);
 
   const result = await createBooking(request);
@@ -51,22 +52,14 @@ test('createBooking calls POST /api/bookings with payload', async () => {
   expect(result).toEqual(booking);
 });
 
-test('updateBooking calls PUT /api/bookings/:id with payload', async () => {
-  const { id: _id, launchRocketName: _rn, launchDate: _ld, ...request } = booking;
-  vi.mocked(httpClient.put).mockResolvedValue(booking);
+test('cancelBooking calls POST /api/bookings/:id/cancel', async () => {
+  const cancelled = { ...booking, status: 'CANCELLED' as const };
+  vi.mocked(httpClient.post).mockResolvedValue(cancelled);
 
-  const result = await updateBooking(1, request);
+  const result = await cancelBooking(1);
 
-  expect(httpClient.put).toHaveBeenCalledWith('/api/bookings/1', request);
-  expect(result).toEqual(booking);
-});
-
-test('deleteBooking calls DELETE /api/bookings/:id', async () => {
-  vi.mocked(httpClient.del).mockResolvedValue(undefined);
-
-  await deleteBooking(1);
-
-  expect(httpClient.del).toHaveBeenCalledWith('/api/bookings/1');
+  expect(httpClient.post).toHaveBeenCalledWith('/api/bookings/1/cancel', undefined);
+  expect(result).toEqual(cancelled);
 });
 
 test('getBookings propagates client errors', async () => {

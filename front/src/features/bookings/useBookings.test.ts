@@ -12,7 +12,8 @@ const booking: Booking = {
   launchDate: '2027-06-15',
   passengerName: 'Ada Lovelace',
   passengerEmail: 'ada@example.com',
-  status: 'CONFIRMED',
+  passengerPhone: '+1 555 0100',
+  status: 'CREATED',
 };
 
 beforeEach(() => {

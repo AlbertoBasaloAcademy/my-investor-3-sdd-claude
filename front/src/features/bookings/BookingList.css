@@ -192,7 +192,7 @@
   letter-spacing: 0.08em;
 }
 
-.booking-status--confirmed {
+.booking-status--created {
   background: var(--color-secondary-container);
   color: var(--color-on-secondary-container);
   box-shadow: 0 0 16px rgba(0, 218, 243, 0.3);
@@ -203,11 +203,6 @@
   color: var(--color-on-error-container);
 }
 
-.booking-status--payed {
-  background: rgba(77, 71, 50, 0.4);
-  color: var(--color-on-surface-variant);
-}
-
 /* --- Row actions --- */
 
 .booking-actions {
@@ -216,14 +211,6 @@
 
 .booking-actions .booking-btn + .booking-btn {
   margin-left: 8px;
-}
-
-.booking-confirm {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 0.875rem;
-  color: var(--color-on-surface-variant);
 }
 
 /* --- States --- */

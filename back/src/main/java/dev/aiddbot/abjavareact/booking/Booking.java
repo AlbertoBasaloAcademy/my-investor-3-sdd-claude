@@ -31,27 +31,33 @@ public class Booking {
   @Column(name = "passenger_email", nullable = false)
   private String passengerEmail;
 
+  @Column(name = "passenger_phone", nullable = false)
+  private String passengerPhone;
+
   @Enumerated(EnumType.STRING)
   @Column(nullable = false)
   private BookingStatus status;
 
   protected Booking() {}
 
-  public Booking(Launch launch, String passengerName, String passengerEmail, BookingStatus status) {
+  public Booking(Launch launch, String passengerName, String passengerEmail, String passengerPhone) {
     this.launch = launch;
     this.passengerName = passengerName;
     this.passengerEmail = passengerEmail;
-    this.status = status;
+    this.passengerPhone = passengerPhone;
+    this.status = BookingStatus.CREATED;
   }
 
   public Long getId() { return id; }
   public Launch getLaunch() { return launch; }
   public String getPassengerName() { return passengerName; }
   public String getPassengerEmail() { return passengerEmail; }
+  public String getPassengerPhone() { return passengerPhone; }
   public BookingStatus getStatus() { return status; }
 
   public void setLaunch(Launch launch) { this.launch = launch; }
   public void setPassengerName(String passengerName) { this.passengerName = passengerName; }
   public void setPassengerEmail(String passengerEmail) { this.passengerEmail = passengerEmail; }
+  public void setPassengerPhone(String passengerPhone) { this.passengerPhone = passengerPhone; }
   public void setStatus(BookingStatus status) { this.status = status; }
 }

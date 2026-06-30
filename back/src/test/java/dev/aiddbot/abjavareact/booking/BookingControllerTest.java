@@ -4,12 +4,8 @@ import static org.hamcrest.Matchers.endsWith;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
-import static org.mockito.BDDMockito.willDoNothing;
-import static org.mockito.BDDMockito.willThrow;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -36,10 +32,11 @@ class BookingControllerTest {
   private static final LocalDate DATE = LocalDate.of(2027, 6, 15);
 
   private static final BookingResponse APOLLO =
-      new BookingResponse(1L, 2L, "Falcon 9", DATE, "Ada Lovelace", "ada@example.com", "CONFIRMED");
+      new BookingResponse(
+          1L, 2L, "Falcon 9", DATE, "Ada Lovelace", "ada@example.com", "555-0100", "CREATED");
 
   private static final BookingRequest APOLLO_REQUEST =
-      new BookingRequest(2L, "Ada Lovelace", "ada@example.com", BookingStatus.CONFIRMED);
+      new BookingRequest(2L, "Ada Lovelace", "ada@example.com", "555-0100");
 
   @Test
   void findAllReturnsBookingList() throws Exception {
@@ -49,7 +46,7 @@ class BookingControllerTest {
         .andExpect(status().isOk())
         .andExpect(jsonPath("$[0].id").value(1))
         .andExpect(jsonPath("$[0].passengerName").value("Ada Lovelace"))
-        .andExpect(jsonPath("$[0].status").value("CONFIRMED"));
+        .andExpect(jsonPath("$[0].status").value("CREATED"));
   }
 
   @Test
@@ -59,7 +56,8 @@ class BookingControllerTest {
     mvc.perform(get("/api/bookings/1"))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.passengerName").value("Ada Lovelace"))
-        .andExpect(jsonPath("$.status").value("CONFIRMED"));
+        .andExpect(jsonPath("$.passengerPhone").value("555-0100"))
+        .andExpect(jsonPath("$.status").value("CREATED"));
   }
 
   @Test
@@ -91,48 +89,26 @@ class BookingControllerTest {
     mvc.perform(
             post("/api/bookings")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(mapper.writeValueAsString(
-                    new BookingRequest(2L, "", "", BookingStatus.CONFIRMED))))
+                .content(mapper.writeValueAsString(new BookingRequest(2L, "", "", ""))))
         .andExpect(status().isBadRequest());
   }
 
   @Test
-  void updateReturnsUpdatedBooking() throws Exception {
-    BookingResponse updated =
-        new BookingResponse(1L, 2L, "Falcon 9", DATE, "Grace Hopper", "grace@example.com", "PAYED");
-    given(service.update(eq(1L), any(BookingRequest.class))).willReturn(updated);
+  void cancelReturnsCancelledBooking() throws Exception {
+    BookingResponse cancelled =
+        new BookingResponse(
+            1L, 2L, "Falcon 9", DATE, "Ada Lovelace", "ada@example.com", "555-0100", "CANCELLED");
+    given(service.cancel(1L)).willReturn(cancelled);
 
-    mvc.perform(
-            put("/api/bookings/1")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(mapper.writeValueAsString(APOLLO_REQUEST)))
+    mvc.perform(post("/api/bookings/1/cancel"))
         .andExpect(status().isOk())
-        .andExpect(jsonPath("$.status").value("PAYED"));
+        .andExpect(jsonPath("$.status").value("CANCELLED"));
   }
 
   @Test
-  void updateReturns404WhenNotFound() throws Exception {
-    given(service.update(eq(99L), any(BookingRequest.class)))
-        .willThrow(new ResponseStatusException(HttpStatus.NOT_FOUND));
+  void cancelReturns404WhenNotFound() throws Exception {
+    given(service.cancel(eq(99L))).willThrow(new ResponseStatusException(HttpStatus.NOT_FOUND));
 
-    mvc.perform(
-            put("/api/bookings/99")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(mapper.writeValueAsString(APOLLO_REQUEST)))
-        .andExpect(status().isNotFound());
-  }
-
-  @Test
-  void deleteReturns204() throws Exception {
-    willDoNothing().given(service).delete(1L);
-
-    mvc.perform(delete("/api/bookings/1")).andExpect(status().isNoContent());
-  }
-
-  @Test
-  void deleteReturns404WhenNotFound() throws Exception {
-    willThrow(new ResponseStatusException(HttpStatus.NOT_FOUND)).given(service).delete(99L);
-
-    mvc.perform(delete("/api/bookings/99")).andExpect(status().isNotFound());
+    mvc.perform(post("/api/bookings/99/cancel")).andExpect(status().isNotFound());
   }
 }

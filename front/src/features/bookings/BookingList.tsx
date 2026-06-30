@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useBookings } from './useBookings';
-import { createBooking, updateBooking, deleteBooking } from './bookingsApi';
+import { createBooking, cancelBooking } from './bookingsApi';
 import { getLaunches } from '../launches/launchesApi';
-import type { Booking, BookingRequest, BookingStatus } from '../../shared/types/booking';
+import type { BookingRequest } from '../../shared/types/booking';
 import type { Launch } from '../../shared/types/launch';
 import './BookingList.css';
 
@@ -10,41 +10,30 @@ type FormState = {
   launchId: string;
   passengerName: string;
   passengerEmail: string;
-  status: BookingStatus;
+  passengerPhone: string;
 };
 
 const EMPTY_FORM: FormState = {
   launchId: '',
   passengerName: '',
   passengerEmail: '',
-  status: 'CONFIRMED',
+  passengerPhone: '',
 };
-
-function bookingToForm(booking: Booking): FormState {
-  return {
-    launchId: String(booking.launchId),
-    passengerName: booking.passengerName,
-    passengerEmail: booking.passengerEmail,
-    status: booking.status,
-  };
-}
 
 function formToRequest(form: FormState): BookingRequest {
   return {
     launchId: Number(form.launchId),
     passengerName: form.passengerName,
     passengerEmail: form.passengerEmail,
-    status: form.status,
+    passengerPhone: form.passengerPhone,
   };
 }
 
 export function BookingList() {
   const { data: bookings, error, isLoading, refresh } = useBookings();
   const [launches, setLaunches] = useState<Launch[]>([]);
-  const [editingId, setEditingId] = useState<number | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
-  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -53,22 +42,13 @@ export function BookingList() {
   }, []);
 
   function openCreate() {
-    setEditingId(null);
     setForm(EMPTY_FORM);
-    setFormError(null);
-    setShowForm(true);
-  }
-
-  function openEdit(booking: Booking) {
-    setEditingId(booking.id);
-    setForm(bookingToForm(booking));
     setFormError(null);
     setShowForm(true);
   }
 
   function cancelForm() {
     setShowForm(false);
-    setEditingId(null);
     setFormError(null);
   }
 
@@ -77,13 +57,8 @@ export function BookingList() {
     setFormError(null);
     setIsSaving(true);
     try {
-      if (editingId !== null) {
-        await updateBooking(editingId, formToRequest(form));
-      } else {
-        await createBooking(formToRequest(form));
-      }
+      await createBooking(formToRequest(form));
       setShowForm(false);
-      setEditingId(null);
       refresh();
     } catch (err) {
       setFormError(err instanceof Error ? err.message : 'Operation failed');
@@ -92,13 +67,12 @@ export function BookingList() {
     }
   }
 
-  async function handleDelete(id: number) {
+  async function handleCancel(id: number) {
     try {
-      await deleteBooking(id);
-      setConfirmDeleteId(null);
+      await cancelBooking(id);
       refresh();
     } catch {
-      setConfirmDeleteId(null);
+      // no-op
     }
   }
 
@@ -142,9 +116,7 @@ export function BookingList() {
 
       {showForm && (
         <form className="booking-form" onSubmit={handleSubmit} data-testid="booking-form">
-          <h3 className="booking-form-title">
-            {editingId !== null ? 'Edit Booking' : 'New Booking'}
-          </h3>
+          <h3 className="booking-form-title">New Booking</h3>
 
           <div className="booking-form-grid">
             <label className="booking-form-field">
@@ -187,16 +159,14 @@ export function BookingList() {
             </label>
 
             <label className="booking-form-field">
-              <span>Status</span>
-              <select
-                value={form.status}
-                onChange={(e) => handleFieldChange('status', e.target.value as BookingStatus)}
-                data-testid="field-status"
-              >
-                <option value="CONFIRMED">Confirmed</option>
-                <option value="CANCELLED">Cancelled</option>
-                <option value="PAYED">Payed</option>
-              </select>
+              <span>Passenger Phone</span>
+              <input
+                type="tel"
+                value={form.passengerPhone}
+                onChange={(e) => handleFieldChange('passengerPhone', e.target.value)}
+                required
+                data-testid="field-passenger-phone"
+              />
             </label>
           </div>
 
@@ -221,7 +191,7 @@ export function BookingList() {
               disabled={isSaving}
               data-testid="submit-btn"
             >
-              {isSaving ? 'Saving…' : editingId !== null ? 'Save Changes' : 'Add Booking'}
+              {isSaving ? 'Saving…' : 'Add Booking'}
             </button>
           </div>
         </form>
@@ -238,6 +208,7 @@ export function BookingList() {
               <tr>
                 <th>Passenger</th>
                 <th>Email</th>
+                <th>Phone</th>
                 <th>Launch</th>
                 <th>Status</th>
                 <th>Actions</th>
@@ -248,6 +219,7 @@ export function BookingList() {
                 <tr key={booking.id} data-testid={`booking-row-${booking.id}`}>
                   <td className="booking-passenger">{booking.passengerName}</td>
                   <td>{booking.passengerEmail}</td>
+                  <td>{booking.passengerPhone}</td>
                   <td>
                     {booking.launchRocketName} — {booking.launchDate}
                   </td>
@@ -259,40 +231,14 @@ export function BookingList() {
                     </span>
                   </td>
                   <td className="booking-actions">
-                    {confirmDeleteId === booking.id ? (
-                      <span className="booking-confirm">
-                        <span>Delete?</span>
-                        <button
-                          className="booking-btn booking-btn--danger"
-                          onClick={() => handleDelete(booking.id)}
-                          data-testid={`confirm-delete-${booking.id}`}
-                        >
-                          Yes
-                        </button>
-                        <button
-                          className="booking-btn booking-btn--ghost"
-                          onClick={() => setConfirmDeleteId(null)}
-                        >
-                          No
-                        </button>
-                      </span>
-                    ) : (
-                      <>
-                        <button
-                          className="booking-btn booking-btn--ghost"
-                          onClick={() => openEdit(booking)}
-                          data-testid={`edit-btn-${booking.id}`}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          className="booking-btn booking-btn--danger"
-                          onClick={() => setConfirmDeleteId(booking.id)}
-                          data-testid={`delete-btn-${booking.id}`}
-                        >
-                          Delete
-                        </button>
-                      </>
+                    {booking.status === 'CREATED' && (
+                      <button
+                        className="booking-btn booking-btn--danger"
+                        onClick={() => handleCancel(booking.id)}
+                        data-testid={`cancel-btn-${booking.id}`}
+                      >
+                        Cancel
+                      </button>
                     )}
                   </td>
                 </tr>

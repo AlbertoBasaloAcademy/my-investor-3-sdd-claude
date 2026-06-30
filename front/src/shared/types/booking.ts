@@ -1,4 +1,4 @@
-export type BookingStatus = 'CONFIRMED' | 'CANCELLED' | 'PAYED';
+export type BookingStatus = 'CREATED' | 'CANCELLED';
 
 export type Booking = {
   id: number;
@@ -7,7 +7,8 @@ export type Booking = {
   launchDate: string;
   passengerName: string;
   passengerEmail: string;
+  passengerPhone: string;
   status: BookingStatus;
 };
 
-export type BookingRequest = Omit<Booking, 'id' | 'launchRocketName' | 'launchDate'>;
+export type BookingRequest = Omit<Booking, 'id' | 'launchRocketName' | 'launchDate' | 'status'>;

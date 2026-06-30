@@ -13,10 +13,6 @@ export async function createBooking(request: BookingRequest): Promise<Booking> {
   return httpClient.post<Booking>('/api/bookings', request);
 }
 
-export async function updateBooking(id: number, request: BookingRequest): Promise<Booking> {
-  return httpClient.put<Booking>(`/api/bookings/${id}`, request);
-}
-
-export async function deleteBooking(id: number): Promise<void> {
-  return httpClient.del(`/api/bookings/${id}`);
+export async function cancelBooking(id: number): Promise<Booking> {
+  return httpClient.post<Booking>(`/api/bookings/${id}/cancel`, undefined);
 }
