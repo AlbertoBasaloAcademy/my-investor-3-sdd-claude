@@ -1,0 +1,75 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Product
+
+AstroBookings is a fictional space tourism company. The app manages rockets, launches, and bookings.
+
+## Stack
+
+- **Backend** (`back/`): Spring Boot 3.5, Java 21, Maven, SQLite via Hibernate (`hibernate-community-dialects` + `sqlite-jdbc`). Runs on port 8080.
+- **Frontend** (`front/`): React 19, TypeScript, Vite, Vitest + Testing Library. Runs on port 5173.
+- **E2E** (`e2e/`): Playwright, drives the real backend + frontend together.
+
+## Commands
+
+### Backend (run from `back/`)
+- `mvnw.cmd spring-boot:run` — start the API (Windows; use `./mvnw` elsewhere)
+- `mvnw.cmd test` — run all tests
+- `mvnw.cmd test -Dtest=RocketServiceTest` — run a single test class
+- `mvnw.cmd package` — build the jar
+
+### Frontend (run from `front/`)
+- `npm run dev` — start the dev server
+- `npm run build` — typecheck (`tsc -b`) then build
+- `npm run lint` — eslint
+- `npm run test` — run Vitest once
+- `npm run test:watch` — Vitest watch mode
+- `npm run test -- src/features/rockets/useRockets.test.ts` — run a single test file
+
+### E2E (run from `e2e/`)
+- `npm run test` — runs Playwright, which boots both the Spring Boot backend (`mvnw.cmd spring-boot:run`) and the Vite dev server itself as `webServer` processes (see `playwright.config.ts`)
+- `npm run test:headed` — same, headed browser
+- `npm run report` — open the last HTML report
+
+## Architecture
+
+### Backend: feature-per-package, 3-layer
+
+Each domain lives in its own package under `back/src/main/java/dev/aiddbot/abjavareact/` (e.g. `rocket/`, `launch/`, `booking/`, `health/`), each containing the full vertical slice:
+
+- `<Feature>.java` — JPA entity
+- `<Feature>Status.java` / other enums — domain enums (e.g. `RocketRange`, `RocketStatus`)
+- `<Feature>Repository.java` — Spring Data JPA repository
+- `<Feature>Service.java` — business logic, validation, entity↔DTO mapping; throws `ResponseStatusException` for 404/400 cases
+- `<Feature>Controller.java` — `@RestController` under `/api/<feature>s`, thin — delegates straight to the service
+- `<Feature>Request.java` / `<Feature>Response.java` — request/response DTOs (records)
+
+Shared cross-cutting config (e.g. `CorsConfig`) lives in `shared/`. CORS allowed origin is configured in `application.yml` (`app.cors.allowed-origins`), pointed at the Vite dev server.
+
+Data persists to a SQLite file at `back/data/app.db`; schema is auto-managed by Hibernate (`ddl-auto: update`).
+
+### Frontend: feature-per-folder
+
+Each domain lives in `front/src/features/<feature>/` with three files following a consistent pattern (see `rockets/` as the reference):
+
+- `<feature>Api.ts` — thin wrapper functions over the shared `httpClient` (`front/src/shared/api/httpClient.ts`), one function per REST operation
+- `use<Feature>.ts` — data-fetching hook (`useState`/`useEffect`, exposes `data`, `error`, `isLoading`, `refresh`)
+- `<Feature>List.tsx` (+ `.css`) — the component
+
+Shared types live in `front/src/shared/types/<feature>.ts`. Every API and hook file has a co-located `.test.ts`/`.test.tsx`.
+
+`VITE_API_BASE_URL` (from `.env`) configures the backend base URL used by `httpClient`.
+
+## Backend coding rules
+
+(from `.claude/rules/back.rules.md`)
+
+- Name classes with PascalCase
+- Write short methods
+- Do not add comments
+
+## Spec-driven workflow
+
+Product specs live in `.product/specs/` (e.g. `bookings.spec.md`, `launches.md`) and describe feature behavior before implementation. The `/codify` skill (`.claude/skills/codify/SKILL.md`) drives implementing a feature from spec: research the existing analogous feature first (rockets is the reference implementation), plan the data model/API/UI, then implement the simplest working solution with unit tests for critical parts but no comments and no e2e tests at that stage.
