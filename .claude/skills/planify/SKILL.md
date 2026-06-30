@@ -31,19 +31,15 @@ Given a spec, bug report, or review report, produce one or more implementation p
 
 ## Steps
 
-### Step 1: Understand the input
+### 1 Research
 - [ ] Identify the input type and derive `{slug}` and `{source}`.
 - [ ] If the input is incomplete or ambiguous, document the assumptions clearly and proceed with best-effort.
-
-### Step 2: Identify tiers
+### 2 Plan
 - [ ] Determine which tiers are involved: `back`, `front`, `db`, or fullstack (no tier).
 - [ ] If multiple tiers are involved, ensure plans are coherent and aligned across them.
-
-### Step 3: Draft the implementation steps
 - [ ] For each tier, define ordered steps with clear titles, short descriptions, and file/folder paths affected.
 - [ ] Each step must be directly traceable to the input problem or solution.
-
-## Output
+### 3 Implment
 - [ ] Write one plan file per tier to `{Product_Folder}/plans/` using the plan template and the correct naming convention.
 
 ## Verification
