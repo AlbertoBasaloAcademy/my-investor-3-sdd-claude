@@ -31,13 +31,13 @@ If no input argument, do nothing.
 Do not read these until is needed.
 
 - {clean-code}: [Clean coding guidelines](./references/clean-coding-guidelines.md)
-- {good-code}: [Good runcodingning guidelines](./references/good-coding-guidelines.md)
+- {good-code}: [Good coding guidelines](./references/good-coding-guidelines.md)
 
 ## Steps
 
 ### 1 Research
 
-- Determine the cod to be reviewd
+- Determine the code to be reviewd
 
 ### 2 Plan
 
@@ -48,6 +48,7 @@ Do not read these until is needed.
 
 - Fix the defects detected
 - Give me a summary of the review process (do not write or generate any file)
+- Use that summary to prepare a git commit message
 
 ## Verification
 
