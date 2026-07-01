@@ -45,7 +45,7 @@ public class BookingService {
             .findById(id)
             .orElseThrow(
                 () -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Booking not found: " + id));
-    booking.setStatus(BookingStatus.CANCELLED);
+    booking.cancel();
     return toResponse(repository.save(booking));
   }
 

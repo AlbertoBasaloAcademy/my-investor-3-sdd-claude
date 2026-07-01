@@ -55,9 +55,5 @@ public class Booking {
   public String getPassengerPhone() { return passengerPhone; }
   public BookingStatus getStatus() { return status; }
 
-  public void setLaunch(Launch launch) { this.launch = launch; }
-  public void setPassengerName(String passengerName) { this.passengerName = passengerName; }
-  public void setPassengerEmail(String passengerEmail) { this.passengerEmail = passengerEmail; }
-  public void setPassengerPhone(String passengerPhone) { this.passengerPhone = passengerPhone; }
-  public void setStatus(BookingStatus status) { this.status = status; }
+  public void cancel() { this.status = BookingStatus.CANCELLED; }
 }

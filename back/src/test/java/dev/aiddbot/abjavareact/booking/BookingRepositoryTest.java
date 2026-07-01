@@ -61,7 +61,7 @@ class BookingRepositoryTest {
   void persistsCancelledBooking() {
     Launch launch = savedLaunch();
     Booking booking = new Booking(launch, "Ada Lovelace", "ada@example.com", "555-0100");
-    booking.setStatus(BookingStatus.CANCELLED);
+    booking.cancel();
 
     Booking saved = repository.save(booking);
 
